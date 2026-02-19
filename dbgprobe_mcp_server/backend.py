@@ -116,6 +116,30 @@ class Backend(ABC):
         With *start_addr* and *end_addr*: erase only that address range.
         """
 
+    # -- Optional methods (concrete defaults) --------------------------------
+    # Backends that support persistent debug connections (e.g. GDBServer)
+    # override these.  Test mocks and simple backends need not implement them.
+
+    async def step(self) -> dict[str, Any]:
+        """Single-step one instruction."""
+        raise NotImplementedError("step() not supported by this backend")
+
+    async def status(self) -> dict[str, Any]:
+        """Query target state (running/halted, PC, stop reason)."""
+        raise NotImplementedError("status() not supported by this backend")
+
+    async def set_breakpoint(self, address: int, bp_type: str = "hw") -> dict[str, Any]:
+        """Set a hardware or software breakpoint at *address*."""
+        raise NotImplementedError("set_breakpoint() not supported by this backend")
+
+    async def clear_breakpoint(self, address: int) -> dict[str, Any]:
+        """Clear a breakpoint at *address*."""
+        raise NotImplementedError("clear_breakpoint() not supported by this backend")
+
+    async def list_breakpoints(self) -> list[dict[str, Any]]:
+        """List active breakpoints."""
+        raise NotImplementedError("list_breakpoints() not supported by this backend")
+
 
 class BackendRegistry:
     """Factory that maps backend names to classes."""

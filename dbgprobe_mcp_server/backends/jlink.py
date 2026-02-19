@@ -1,4 +1,4 @@
-"""J-Link backend — drives targets via JLinkExe (Commander) subprocess."""
+"""J-Link backend — persistent JLinkGDBServer connection + JLinkExe for flash/erase."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import logging
 import os
 import re
 import shutil
+import socket
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from dbgprobe_mcp_server.backend import Backend, ConnectConfig, DeviceSecuredError, ProbeInfo
+from dbgprobe_mcp_server.gdb_client import GdbClient, GdbConnectionError, GdbProtocolError, GdbTimeoutError
 
 logger = logging.getLogger("dbgprobe_mcp_server")
 
@@ -343,16 +345,45 @@ async def _run_jlink_list_probes(exe: str, timeout: float = 15.0) -> tuple[str, 
 # ---------------------------------------------------------------------------
 
 
+def _allocate_free_port() -> int:
+    """Allocate a free TCP port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+# Keyword that JLinkGDBServer prints when it's ready for connections.
+_GDBSERVER_READY = "Waiting for GDB connection"
+
+# Error keywords in GDBServer output.
+_GDBSERVER_ERRORS = [
+    "could not connect",
+    "cannot connect",
+    "no j-link",
+    "no emulators found",
+    "device is secured",
+    "approtect",
+    "unknown device",
+]
+
+
 class JLinkBackend(Backend):
-    """J-Link backend using JLinkExe subprocess calls."""
+    """J-Link backend — persistent JLinkGDBServer + GDB RSP for session ops,
+    JLinkExe one-shot for flash/erase/list_probes."""
 
     name = "jlink"
 
     def __init__(self) -> None:
         self._exe: str | None = None
-        self._gdbserver: str | None = None
+        self._gdbserver_path: str | None = None
         self._rttclient: str | None = None
         self._config: ConnectConfig | None = None
+
+        # GDBServer persistent connection state
+        self._gdbserver_proc: asyncio.subprocess.Process | None = None
+        self._gdb_client: GdbClient | None = None
+        self._gdb_port: int | None = None
+        self._target_running: bool = False
 
     @property
     def exe(self) -> str:
@@ -362,13 +393,17 @@ class JLinkBackend(Backend):
 
     def _resolve_paths(self) -> dict[str, str | None]:
         self._exe = find_jlink_exe()
-        self._gdbserver = find_jlink_gdbserver()
+        self._gdbserver_path = find_jlink_gdbserver()
         self._rttclient = find_jlink_rttclient()
         return {
             "jlink_exe": self._exe,
-            "jlink_gdbserver": self._gdbserver,
+            "jlink_gdbserver": self._gdbserver_path,
             "jlink_rttclient": self._rttclient,
         }
+
+    # ------------------------------------------------------------------
+    # list_probes — JLinkExe one-shot (session-less, unchanged)
+    # ------------------------------------------------------------------
 
     async def list_probes(self) -> list[ProbeInfo]:
         exe = find_jlink_exe()
@@ -382,71 +417,308 @@ class JLinkBackend(Backend):
             raise RuntimeError(err)
         return _parse_probe_list(stdout)
 
+    # ------------------------------------------------------------------
+    # connect — start JLinkGDBServer + GDB RSP handshake
+    # ------------------------------------------------------------------
+
     async def connect(self, config: ConnectConfig) -> dict[str, Any]:
         paths = self._resolve_paths()
         if self._exe is None:
             raise FileNotFoundError(
                 "JLinkExe not found. Install SEGGER J-Link Software or set DBGPROBE_JLINK_PATH."
             )
+        if self._gdbserver_path is None:
+            raise FileNotFoundError(
+                "JLinkGDBServerCLExe not found. Install SEGGER J-Link Software "
+                "or set DBGPROBE_JLINK_GDBSERVER_PATH."
+            )
+
         self._config = config
 
-        # Validate connectivity with a simple script.
-        commands = ["h", "q"]
-        stdout, stderr, _rc = await _run_jlink_script(
-            self._exe,
-            commands,
-            device=config.device,
-            interface=config.interface,
-            speed_khz=config.speed_khz,
-            serial=config.probe_serial,
+        try:
+            await self._start_gdbserver(config)
+        except DeviceSecuredError:
+            self._config = None
+            raise
+        except Exception:
+            self._config = None
+            await self._stop_gdbserver()
+            raise
+
+        result: dict[str, Any] = {"resolved_paths": paths}
+        if self._gdb_port is not None:
+            result["gdb_port"] = self._gdb_port
+        return result
+
+    async def _start_gdbserver(self, config: ConnectConfig) -> None:
+        """Spawn JLinkGDBServer and connect via GDB RSP."""
+        port = _allocate_free_port()
+        self._gdb_port = port
+
+        args = [self._gdbserver_path]  # type: ignore[list-item]
+        if config.device:
+            args += ["-device", config.device]
+        args += ["-if", config.interface]
+        args += ["-speed", str(config.speed_khz)]
+        args += ["-port", str(port)]
+        args += ["-nogui", "-localhostonly", "1", "-noir"]
+        if config.probe_serial:
+            args += ["-select", f"USB={config.probe_serial}"]
+
+        logger.debug("Starting GDBServer: %s", " ".join(args))
+
+        self._gdbserver_proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
-        if _is_device_secured(stdout, stderr):
-            self._config = None
-            raise DeviceSecuredError(
-                f"Target device is secured. Use dbgprobe.erase to mass-erase and unlock."
-                f"\n\n[JLink output]\n{stdout.strip()}"
-            )
-        err_msg = _check_error(stdout, stderr)
-        if err_msg:
-            self._config = None
-            raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
+        # Wait for ready or error
+        collected_output = ""
+        try:
+            deadline = asyncio.get_event_loop().time() + 10.0
+            assert self._gdbserver_proc.stdout is not None
+            while asyncio.get_event_loop().time() < deadline:
+                remaining = deadline - asyncio.get_event_loop().time()
+                try:
+                    line_bytes = await asyncio.wait_for(
+                        self._gdbserver_proc.stdout.readline(),
+                        timeout=max(remaining, 0.1),
+                    )
+                except TimeoutError:
+                    break
+                if not line_bytes:
+                    break  # EOF — process exited
+                line = line_bytes.decode("utf-8", errors="replace")
+                collected_output += line
+                logger.debug("GDBServer: %s", line.rstrip())
 
-        return {"resolved_paths": paths}
+                if _GDBSERVER_READY.lower() in line.lower():
+                    break  # Ready!
+
+                # Check for fatal errors
+                lower = line.lower()
+                for kw in _GDBSERVER_ERRORS:
+                    if kw in lower:
+                        # Drain remaining output
+                        try:
+                            rest = await asyncio.wait_for(
+                                self._gdbserver_proc.stdout.read(4096),
+                                timeout=1.0,
+                            )
+                            collected_output += rest.decode("utf-8", errors="replace")
+                        except TimeoutError:
+                            pass
+                        if _is_device_secured(collected_output, ""):
+                            raise DeviceSecuredError(
+                                f"Target device is secured. Use dbgprobe.erase to mass-erase and unlock."
+                                f"\n\n[GDBServer output]\n{collected_output.strip()}"
+                            )
+                        err_msg = _check_error(collected_output, "")
+                        if err_msg:
+                            raise ConnectionError(
+                                f"{err_msg}\n\n[GDBServer output]\n{collected_output.strip()}"
+                            )
+                        raise ConnectionError(
+                            f"JLinkGDBServer failed to start.\n\n[GDBServer output]\n{collected_output.strip()}"
+                        )
+            else:
+                # Timeout — check if process is still alive
+                if self._gdbserver_proc.returncode is not None:
+                    raise ConnectionError(
+                        f"JLinkGDBServer exited unexpectedly (code {self._gdbserver_proc.returncode})."
+                        f"\n\n[GDBServer output]\n{collected_output.strip()}"
+                    )
+                raise ConnectionError(
+                    f"JLinkGDBServer did not become ready within 10s."
+                    f"\n\n[GDBServer output]\n{collected_output.strip()}"
+                )
+        except (DeviceSecuredError, ConnectionError):
+            raise
+        except Exception as exc:
+            raise ConnectionError(
+                f"Failed to start JLinkGDBServer: {exc}\n\n[GDBServer output]\n{collected_output.strip()}"
+            ) from exc
+
+        # Connect GDB client
+        self._gdb_client = GdbClient("127.0.0.1", port)
+        try:
+            await self._gdb_client.connect(timeout=5.0)
+        except GdbConnectionError as exc:
+            raise ConnectionError(f"Failed to connect to GDBServer: {exc}") from exc
+
+        self._target_running = False
+
+    # ------------------------------------------------------------------
+    # disconnect — close GDB + kill GDBServer
+    # ------------------------------------------------------------------
 
     async def disconnect(self) -> None:
+        await self._close_gdb_client()
+        await self._stop_gdbserver()
         self._config = None
 
-    async def reset(self, mode: str) -> dict[str, Any]:
-        cfg = self._require_config()
-        if mode == "halt":
-            commands = ["r", "h", "q"]
-        elif mode == "hard":
-            commands = ["RSetType 2", "r", "g", "q"]
-        else:
-            commands = ["r", "g", "q"]
+    async def _close_gdb_client(self) -> None:
+        if self._gdb_client is not None:
+            try:
+                await self._gdb_client.close()
+            except Exception:
+                pass
+            self._gdb_client = None
 
-        stdout, stderr, _rc = await self._run(commands, cfg)
-        err_msg = _check_error(stdout, stderr)
-        if err_msg:
-            raise ConnectionError(err_msg)
-        return {"mode": mode}
+    async def _stop_gdbserver(self) -> None:
+        if self._gdbserver_proc is not None:
+            try:
+                self._gdbserver_proc.terminate()
+                await asyncio.wait_for(self._gdbserver_proc.wait(), timeout=2.0)
+            except TimeoutError:
+                await _kill_process(self._gdbserver_proc)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                pass
+            self._gdbserver_proc = None
+        self._gdb_port = None
+
+    # ------------------------------------------------------------------
+    # Session operations — all through GDB protocol
+    # ------------------------------------------------------------------
+
+    def _require_gdb(self) -> GdbClient:
+        """Return the live GDB client or raise."""
+        if self._config is None:
+            raise ConnectionError("Not connected. Call dbgprobe.connect first.")
+        if self._gdb_client is None or not self._gdb_client.connected:
+            raise ConnectionError("GDB connection lost. Disconnect and reconnect.")
+        return self._gdb_client
 
     async def halt(self) -> dict[str, Any]:
-        cfg = self._require_config()
-        stdout, stderr, _rc = await self._run(["h", "q"], cfg)
-        err_msg = _check_error(stdout, stderr)
-        if err_msg:
-            raise ConnectionError(err_msg)
-        return {}
+        client = self._require_gdb()
+        try:
+            if self._target_running:
+                sr = await client.halt()
+            else:
+                sr = await client.query_status()
+            self._target_running = False
+            return {"pc": sr.registers.get(15), "reason": sr.reason, "signal": sr.signal}
+        except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
+            raise ConnectionError(str(exc)) from exc
 
     async def go(self) -> dict[str, Any]:
-        cfg = self._require_config()
-        stdout, stderr, _rc = await self._run(["g", "q"], cfg)
-        err_msg = _check_error(stdout, stderr)
-        if err_msg:
-            raise ConnectionError(err_msg)
-        return {}
+        client = self._require_gdb()
+        try:
+            await client.continue_execution()
+            self._target_running = True
+            return {}
+        except (GdbConnectionError, GdbProtocolError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    async def step(self) -> dict[str, Any]:
+        client = self._require_gdb()
+        if self._target_running:
+            raise ConnectionError("Target is running. Call dbgprobe.halt first.")
+        try:
+            sr = await client.step()
+            self._target_running = False
+            reason = "step" if sr.reason == "halted" else sr.reason
+            return {"pc": sr.registers.get(15), "reason": reason, "signal": sr.signal}
+        except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    async def status(self) -> dict[str, Any]:
+        client = self._require_gdb()
+        try:
+            if self._target_running:
+                # Poll for async stop (non-blocking check)
+                try:
+                    sr = await asyncio.wait_for(client.wait_stop(timeout=0.1), timeout=0.2)
+                    self._target_running = False
+                    return {
+                        "state": "halted",
+                        "pc": sr.registers.get(15),
+                        "reason": sr.reason,
+                        "signal": sr.signal,
+                    }
+                except (TimeoutError, GdbTimeoutError):
+                    return {"state": "running"}
+            else:
+                sr = await client.query_status()
+                return {
+                    "state": "halted",
+                    "pc": sr.registers.get(15),
+                    "reason": sr.reason,
+                    "signal": sr.signal,
+                }
+        except (GdbConnectionError, GdbProtocolError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    async def reset(self, mode: str) -> dict[str, Any]:
+        client = self._require_gdb()
+        try:
+            if mode == "hard":
+                await client.monitor_command("reset 2")
+            elif mode == "halt":
+                await client.monitor_command("reset")
+                await client.monitor_command("halt")
+                self._target_running = False
+                return {"mode": mode}
+            else:
+                await client.monitor_command("reset")
+
+            # For soft and hard resets, target is running after reset
+            self._target_running = True
+            return {"mode": mode}
+        except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    async def mem_read(self, address: int, length: int) -> bytes:
+        client = self._require_gdb()
+        try:
+            return await client.read_memory(address, length)
+        except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    async def mem_write(self, address: int, data: bytes) -> dict[str, Any]:
+        client = self._require_gdb()
+        try:
+            await client.write_memory(address, data)
+            return {"address": address, "length": len(data)}
+        except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    # ------------------------------------------------------------------
+    # Breakpoints
+    # ------------------------------------------------------------------
+
+    async def set_breakpoint(self, address: int, bp_type: str = "hw") -> dict[str, Any]:
+        client = self._require_gdb()
+        gdb_type = 1 if bp_type == "hw" else 0
+        try:
+            await client.set_breakpoint(gdb_type, address)
+            return {"address": address, "bp_type": bp_type}
+        except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    async def clear_breakpoint(self, address: int) -> dict[str, Any]:
+        client = self._require_gdb()
+        # Try hardware first, then software
+        for gdb_type in (1, 0):
+            try:
+                await client.clear_breakpoint(gdb_type, address)
+                return {"address": address}
+            except GdbProtocolError:
+                continue
+        raise ConnectionError(f"Failed to clear breakpoint at 0x{address:08x}")
+
+    async def list_breakpoints(self) -> list[dict[str, Any]]:
+        # GDB RSP doesn't have a "list breakpoints" command — this is tracked
+        # in session state (session.breakpoints).  The backend returns an empty
+        # list; the handler layer is responsible for the authoritative list.
+        return []
+
+    # ------------------------------------------------------------------
+    # flash — teardown GDB → JLinkExe one-shot → restart GDB
+    # ------------------------------------------------------------------
 
     async def flash(
         self,
@@ -455,11 +727,25 @@ class JLinkBackend(Backend):
         verify: bool = True,
         reset_after: bool = True,
     ) -> dict[str, Any]:
-        cfg = self._require_config()
+        self._require_config()
         resolved = Path(path).resolve()
         if not resolved.is_file():
             raise FileNotFoundError(f"Firmware file not found: {path}")
 
+        # 1. Halt target if running
+        if self._target_running and self._gdb_client and self._gdb_client.connected:
+            try:
+                await self._gdb_client.halt()
+            except Exception:
+                pass
+            self._target_running = False
+
+        # 2. Tear down GDB connection
+        await self._close_gdb_client()
+        await self._stop_gdbserver()
+
+        # 3. Flash via JLinkExe one-shot (existing logic, unchanged)
+        cfg = self._require_config()
         ext = resolved.suffix.lower()
         commands: list[str] = []
 
@@ -476,7 +762,6 @@ class JLinkBackend(Backend):
         if verify:
             if ext in (".hex", ".ihex", ".elf"):
                 commands.append(f"verifybin {resolved},0")
-            # For raw binary, verifybin needs the address
             elif addr is not None:
                 commands.append(f"verifybin {resolved},{addr:#x}")
 
@@ -486,58 +771,31 @@ class JLinkBackend(Backend):
 
         commands.append("q")
 
-        stdout, stderr, _rc = await self._run(commands, cfg)
+        stdout, stderr, _rc = await _run_jlink_script(
+            self.exe,
+            commands,
+            device=cfg.device,
+            interface=cfg.interface,
+            speed_khz=cfg.speed_khz,
+            serial=cfg.probe_serial,
+        )
         err_msg = _check_error(stdout, stderr)
         if err_msg:
             raise ConnectionError(err_msg)
-        return {"file": str(resolved), "verified": verify, "reset": reset_after}
 
-    async def mem_read(self, address: int, length: int) -> bytes:
-        cfg = self._require_config()
+        # 4. Restart GDBServer + reconnect
+        await self._start_gdbserver(cfg)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", prefix="dbgprobe_memread_") as f:
-            tmp_path = f.name
+        return {
+            "file": str(resolved),
+            "verified": verify,
+            "reset": reset_after,
+            "breakpoints_cleared": True,
+        }
 
-        try:
-            commands = [
-                f"savebin {tmp_path},{address:#x},{length:#x}",
-                "q",
-            ]
-            stdout, stderr, _rc = await self._run(commands, cfg)
-            err_msg = _check_error(stdout, stderr)
-            if err_msg:
-                raise ConnectionError(err_msg)
-
-            return Path(tmp_path).read_bytes()
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-    async def mem_write(self, address: int, data: bytes) -> dict[str, Any]:
-        cfg = self._require_config()
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", prefix="dbgprobe_memwrite_") as f:
-            f.write(data)
-            tmp_path = f.name
-
-        try:
-            commands = [
-                f"loadbin {tmp_path},{address:#x}",
-                "q",
-            ]
-            stdout, stderr, _rc = await self._run(commands, cfg)
-            err_msg = _check_error(stdout, stderr)
-            if err_msg:
-                raise ConnectionError(err_msg)
-
-            return {"address": address, "length": len(data)}
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    # ------------------------------------------------------------------
+    # erase — JLinkExe one-shot (session-less or teardown/reconnect)
+    # ------------------------------------------------------------------
 
     async def erase(
         self,
@@ -545,6 +803,18 @@ class JLinkBackend(Backend):
         start_addr: int | None = None,
         end_addr: int | None = None,
     ) -> dict[str, Any]:
+        # If we have a live GDB session, tear it down first
+        had_session = self._gdb_client is not None
+        if had_session:
+            if self._target_running and self._gdb_client and self._gdb_client.connected:
+                try:
+                    await self._gdb_client.halt()
+                except Exception:
+                    pass
+                self._target_running = False
+            await self._close_gdb_client()
+            await self._stop_gdbserver()
+
         paths = self._resolve_paths()
         if self._exe is None:
             raise FileNotFoundError(
@@ -569,11 +839,14 @@ class JLinkBackend(Backend):
         combined = stdout + "\n" + stderr
         lower = combined.lower()
         if "erasing done" not in lower and "erase: completed" not in lower:
-            # Erase didn't confirm success — check for specific errors.
             err_msg = _check_error(stdout, stderr)
             if err_msg:
                 raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
             raise ConnectionError(f"Erase did not complete successfully.\n\n[JLink output]\n{stdout.strip()}")
+
+        # If we had a session, restart GDBServer
+        if had_session and self._config is not None:
+            await self._start_gdbserver(self._config)
 
         return {"resolved_paths": paths}
 
@@ -584,7 +857,8 @@ class JLinkBackend(Backend):
             raise ConnectionError("Not connected. Call dbgprobe.connect first.")
         return self._config
 
-    async def _run(self, commands: list[str], cfg: ConnectConfig) -> tuple[str, str, int]:
+    async def _run_jlink_oneshot(self, commands: list[str], cfg: ConnectConfig) -> tuple[str, str, int]:
+        """Run a JLinkExe one-shot command (for flash/erase)."""
         return await _run_jlink_script(
             self.exe,
             commands,

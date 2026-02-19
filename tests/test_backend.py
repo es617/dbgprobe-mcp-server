@@ -160,3 +160,32 @@ class TestDummyBackend:
         backend = DummyBackend()
         result = await backend.mem_write(0x2000_0000, b"\x01\x02")
         assert result["length"] == 2
+
+
+class TestOptionalMethods:
+    """New concrete methods raise NotImplementedError by default."""
+
+    async def test_step_not_implemented(self):
+        backend = DummyBackend()
+        with pytest.raises(NotImplementedError, match="step"):
+            await backend.step()
+
+    async def test_status_not_implemented(self):
+        backend = DummyBackend()
+        with pytest.raises(NotImplementedError, match="status"):
+            await backend.status()
+
+    async def test_set_breakpoint_not_implemented(self):
+        backend = DummyBackend()
+        with pytest.raises(NotImplementedError, match="set_breakpoint"):
+            await backend.set_breakpoint(0x0800_0000)
+
+    async def test_clear_breakpoint_not_implemented(self):
+        backend = DummyBackend()
+        with pytest.raises(NotImplementedError, match="clear_breakpoint"):
+            await backend.clear_breakpoint(0x0800_0000)
+
+    async def test_list_breakpoints_not_implemented(self):
+        backend = DummyBackend()
+        with pytest.raises(NotImplementedError, match="list_breakpoints"):
+            await backend.list_breakpoints()

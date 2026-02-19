@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dbgprobe_mcp_server.state import DbgProbeSession, ProbeConnection, ProbeState
+from dbgprobe_mcp_server.state import Breakpoint, DbgProbeSession, ProbeConnection, ProbeState
 
 
 class TestProbeState:
@@ -64,3 +64,23 @@ class TestDbgProbeSession:
     def test_created_at(self):
         session = DbgProbeSession(connection_id="p1")
         assert session.created_at > 0
+
+    def test_breakpoints_default_empty(self):
+        session = DbgProbeSession(connection_id="p1")
+        assert session.breakpoints == {}
+
+    def test_breakpoints_add_and_remove(self):
+        session = DbgProbeSession(connection_id="p1")
+        bp = Breakpoint(address=0x0800_0100, bp_type="hw")
+        session.breakpoints[bp.address] = bp
+        assert 0x0800_0100 in session.breakpoints
+        assert session.breakpoints[0x0800_0100].bp_type == "hw"
+        del session.breakpoints[0x0800_0100]
+        assert session.breakpoints == {}
+
+
+class TestBreakpoint:
+    def test_fields(self):
+        bp = Breakpoint(address=0x0800_0000, bp_type="sw")
+        assert bp.address == 0x0800_0000
+        assert bp.bp_type == "sw"

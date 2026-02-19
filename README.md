@@ -29,7 +29,7 @@ It gives any MCP-compatible agent a full set of debug probe tools. The agent cal
 
 - **Flash and iterate** — build firmware, flash it, reset, check behavior — all in one conversation
 - **Inspect memory** — read peripheral registers, check RAM contents, verify flash writes
-- **Debug interactively** — halt the CPU, inspect state, resume, set breakpoints (future)
+- **Debug interactively** — halt, step, set breakpoints, inspect state, resume
 - **Automate test flows** — flash → reset → read output → validate
 - **Multi-probe setups** — connect to multiple probes simultaneously, each with its own session
 
@@ -90,7 +90,7 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 
 | Category | Tools |
 |---|---|
-| **Probe** | `dbgprobe.list_probes`, `dbgprobe.connect`, `dbgprobe.erase`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write` |
+| **Probe** | `dbgprobe.list_probes`, `dbgprobe.connect`, `dbgprobe.erase`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.step`, `dbgprobe.status`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write`, `dbgprobe.breakpoint.set`, `dbgprobe.breakpoint.clear`, `dbgprobe.breakpoint.list` |
 | **Introspection** | `dbgprobe.connections.list` |
 | **Protocol Specs** | `dbgprobe.spec.template`, `dbgprobe.spec.register`, `dbgprobe.spec.list`, `dbgprobe.spec.attach`, `dbgprobe.spec.get`, `dbgprobe.spec.read`, `dbgprobe.spec.search` |
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
@@ -200,17 +200,16 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 - [ ] **pyOCD backend** — native Python probe access via pyOCD library
 - [ ] **RTT support** — Real-Time Transfer (read target output via persistent debug connection)
 - [ ] **Register-level tools** — named peripheral register read/write using SVD files
-- [ ] **Breakpoint/watchpoint support** — set and manage hardware breakpoints
-- [ ] **GDB integration** — launch and manage GDB sessions through the probe
+- [x] **Breakpoint support** — hardware and software breakpoints via GDB RSP
+- [x] **GDB integration** — persistent JLinkGDBServer connection with GDB Remote Serial Protocol
 - [ ] **Multi-core support** — target specific cores on multi-core SoCs
 ---
 
 ## Known limitations
 
 - **Single-client only.** The server handles one MCP session at a time (stdio transport).
-- **One-shot operations.** Each J-Link operation spawns a new JLinkExe process. This is reliable but adds latency compared to a persistent connection.
-- **No RTT yet.** RTT (Real-Time Transfer) requires a persistent debug connection, planned for a future version.
-- **No breakpoints yet.** Halt/go work, but setting breakpoints requires GDB or JLinkExe breakpoint commands (future work).
+- **No RTT yet.** RTT (Real-Time Transfer) is planned for a future version.
+- **Flash operations restart GDBServer.** Flashing firmware tears down and reconnects the GDB session, which clears breakpoints.
 
 ---
 

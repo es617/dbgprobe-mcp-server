@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+- **Persistent JLinkGDBServer connection** — `dbgprobe.connect` now starts a persistent JLinkGDBServer subprocess and communicates via GDB Remote Serial Protocol over TCP, replacing one-shot JLinkExe calls for session operations
+- **New tool: `dbgprobe.step`** — single-step one instruction, returns PC and stop reason
+- **New tool: `dbgprobe.status`** — query target state (running/halted, PC, stop reason)
+- **New tool: `dbgprobe.breakpoint.set`** — set hardware or software breakpoints
+- **New tool: `dbgprobe.breakpoint.clear`** — clear breakpoints by address
+- **New tool: `dbgprobe.breakpoint.list`** — list active breakpoints for a session
+- **GDB RSP client** — new async `GdbClient` class for GDB Remote Serial Protocol over TCP (zero dependencies beyond asyncio)
+- **Flash teardown/reconnect** — `dbgprobe.flash` tears down GDB, flashes via JLinkExe (all file formats supported), and reconnects GDBServer automatically
+- **Breakpoint tracking** — breakpoints are tracked per session and cleared on flash
+- 15 probe tools total (up from 10)
+
 ## 0.2.0
 
 - **New tool: `dbgprobe.erase`** — mass-erase the target chip, unlocking secured/read-protected devices (e.g. Nordic APPROTECT)

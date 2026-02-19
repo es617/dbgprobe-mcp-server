@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dbgprobe_mcp_server.backend import ConnectConfig, DeviceSecuredError
+from dbgprobe_mcp_server.backend import ConnectConfig
 from dbgprobe_mcp_server.backends.jlink import (
     JLinkBackend,
     _check_error,
     _is_device_secured,
     _parse_probe_list,
     find_jlink_exe,
+)
+from dbgprobe_mcp_server.gdb_client import (
+    GdbClient,
+    GdbConnectionError,
+    GdbProtocolError,
+    StopReply,
 )
 
 # ---------------------------------------------------------------------------
@@ -218,29 +223,67 @@ class TestFindJLinkExe:
 
 
 # ---------------------------------------------------------------------------
-# JLinkBackend (mocked subprocess)
+# Mock GDB client helper
 # ---------------------------------------------------------------------------
 
 
-def _mock_run_jlink_script(stdout: str, stderr: str = "", rc: int = 0):
-    """Return an AsyncMock that replaces _run_jlink_script."""
-    mock = AsyncMock(return_value=(stdout, stderr, rc))
+def _make_mock_gdb_client(**overrides) -> MagicMock:
+    """Create a MagicMock that behaves like GdbClient."""
+    mock = MagicMock(spec=GdbClient)
+    mock.connected = True
+    mock.connect = AsyncMock()
+    mock.close = AsyncMock()
+    mock.send_packet = AsyncMock(return_value="OK")
+    mock.send_interrupt = AsyncMock()
+    mock.read_memory = AsyncMock(return_value=b"\x00" * 16)
+    mock.write_memory = AsyncMock()
+    mock.continue_execution = AsyncMock()
+    mock.step = AsyncMock(return_value=StopReply(signal=5, reason="halted", registers={15: 0x0800_0100}))
+    mock.halt = AsyncMock(return_value=StopReply(signal=2, reason="interrupt", registers={15: 0x0800_0200}))
+    mock.query_status = AsyncMock(
+        return_value=StopReply(signal=5, reason="halted", registers={15: 0x0800_0300})
+    )
+    mock.set_breakpoint = AsyncMock()
+    mock.clear_breakpoint = AsyncMock()
+    mock.monitor_command = AsyncMock(return_value="OK")
+    mock.read_registers = AsyncMock(return_value=b"\x00" * 64)
+    mock.wait_stop = AsyncMock(return_value=StopReply(signal=5, reason="halted", registers={15: 0x0800_0400}))
+    for key, val in overrides.items():
+        setattr(mock, key, val)
     return mock
 
 
-def _mock_run_jlink_list_probes(stdout: str, stderr: str = "", rc: int = 0):
-    """Return an AsyncMock that replaces _run_jlink_list_probes."""
-    return AsyncMock(return_value=(stdout, stderr, rc))
+def _make_connected_backend(**gdb_overrides) -> JLinkBackend:
+    """Create a JLinkBackend with a mock GDB client already connected."""
+    backend = JLinkBackend()
+    backend._exe = "/usr/bin/JLinkExe"
+    backend._gdbserver_path = "/usr/bin/JLinkGDBServerCLExe"
+    backend._config = ConnectConfig(
+        backend="jlink",
+        device="nRF52840_xxAA",
+        interface="SWD",
+        speed_khz=4000,
+        probe_serial=None,
+    )
+    backend._gdb_client = _make_mock_gdb_client(**gdb_overrides)
+    backend._gdb_port = 2331
+    backend._target_running = False
+    return backend
 
 
-class TestJLinkBackend:
+# ---------------------------------------------------------------------------
+# JLinkBackend — GDB-based session operations
+# ---------------------------------------------------------------------------
+
+
+class TestJLinkBackendListProbes:
     async def test_list_probes(self):
         backend = JLinkBackend()
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_list_probes",
-                _mock_run_jlink_list_probes(SHOW_EMU_LIST_OUTPUT),
+                AsyncMock(return_value=(SHOW_EMU_LIST_OUTPUT, "", 0)),
             ),
         ):
             probes = await backend.list_probes()
@@ -254,28 +297,8 @@ class TestJLinkBackend:
         ):
             await backend.list_probes()
 
-    async def test_connect_success(self):
-        backend = JLinkBackend()
-        cfg = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        with (
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
-            patch(
-                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-                _mock_run_jlink_script("Connected OK\nHalting...\n"),
-            ),
-        ):
-            result = await backend.connect(cfg)
-            assert "resolved_paths" in result
-            assert result["resolved_paths"]["jlink_exe"] == "/usr/bin/JLinkExe"
 
+class TestJLinkBackendConnect:
     async def test_connect_no_exe(self):
         backend = JLinkBackend()
         cfg = ConnectConfig(
@@ -287,17 +310,17 @@ class TestJLinkBackend:
         )
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value="/usr/bin/gdb"),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             pytest.raises(FileNotFoundError, match="JLinkExe not found"),
         ):
             await backend.connect(cfg)
 
-    async def test_connect_failure(self):
+    async def test_connect_no_gdbserver(self):
         backend = JLinkBackend()
         cfg = ConnectConfig(
             backend="jlink",
-            device="nRF52840_xxAA",
+            device=None,
             interface="SWD",
             speed_khz=4000,
             probe_serial=None,
@@ -306,179 +329,168 @@ class TestJLinkBackend:
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
-            patch(
-                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-                _mock_run_jlink_script("Cannot connect to target"),
-            ),
-            pytest.raises(ConnectionError, match="Cannot connect"),
+            pytest.raises(FileNotFoundError, match="JLinkGDBServerCLExe not found"),
         ):
             await backend.connect(cfg)
 
-    async def test_halt(self):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            _mock_run_jlink_script("Halted\n"),
-        ):
-            result = await backend.halt()
-            assert isinstance(result, dict)
 
+class TestJLinkBackendHalt:
+    async def test_halt_when_running(self):
+        backend = _make_connected_backend()
+        backend._target_running = True
+        result = await backend.halt()
+        assert result["reason"] == "interrupt"
+        assert result["signal"] == 2
+        assert result["pc"] == 0x0800_0200
+        backend._gdb_client.halt.assert_awaited_once()
+
+    async def test_halt_when_halted(self):
+        backend = _make_connected_backend()
+        backend._target_running = False
+        result = await backend.halt()
+        assert result["reason"] == "halted"
+        backend._gdb_client.query_status.assert_awaited_once()
+
+    async def test_halt_connection_error(self):
+        backend = _make_connected_backend()
+        backend._target_running = True
+        backend._gdb_client.halt = AsyncMock(side_effect=GdbConnectionError("lost"))
+        with pytest.raises(ConnectionError, match="lost"):
+            await backend.halt()
+
+
+class TestJLinkBackendGo:
     async def test_go(self):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            _mock_run_jlink_script("Resumed\n"),
-        ):
-            result = await backend.go()
-            assert isinstance(result, dict)
+        backend = _make_connected_backend()
+        result = await backend.go()
+        assert result == {}
+        assert backend._target_running is True
+        backend._gdb_client.continue_execution.assert_awaited_once()
 
+
+class TestJLinkBackendStep:
+    async def test_step(self):
+        backend = _make_connected_backend()
+        result = await backend.step()
+        assert result["reason"] == "step"
+        assert result["pc"] == 0x0800_0100
+        backend._gdb_client.step.assert_awaited_once()
+
+    async def test_step_while_running_raises(self):
+        backend = _make_connected_backend()
+        backend._target_running = True
+        with pytest.raises(ConnectionError, match="running"):
+            await backend.step()
+
+
+class TestJLinkBackendStatus:
+    async def test_status_halted(self):
+        backend = _make_connected_backend()
+        backend._target_running = False
+        result = await backend.status()
+        assert result["state"] == "halted"
+        assert result["reason"] == "halted"
+
+    async def test_status_running(self):
+        backend = _make_connected_backend()
+        backend._target_running = True
+        # wait_stop times out — target is still running
+        backend._gdb_client.wait_stop = AsyncMock(side_effect=TimeoutError())
+        result = await backend.status()
+        assert result["state"] == "running"
+
+
+class TestJLinkBackendReset:
     async def test_reset_soft(self):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            _mock_run_jlink_script("Reset\n"),
-        ) as mock:
-            result = await backend.reset("soft")
-            assert result["mode"] == "soft"
-            # Verify command includes "r" and "g" and "q"
-            call_args = mock.call_args
-            commands = call_args[0][1]
-            assert "r" in commands
-            assert "g" in commands
+        backend = _make_connected_backend()
+        result = await backend.reset("soft")
+        assert result["mode"] == "soft"
+        assert backend._target_running is True
+        backend._gdb_client.monitor_command.assert_awaited_once_with("reset")
 
     async def test_reset_halt(self):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            _mock_run_jlink_script("Reset\n"),
-        ) as mock:
-            result = await backend.reset("halt")
-            assert result["mode"] == "halt"
-            call_args = mock.call_args
-            commands = call_args[0][1]
-            assert "h" in commands
+        backend = _make_connected_backend()
+        result = await backend.reset("halt")
+        assert result["mode"] == "halt"
+        assert backend._target_running is False
+        calls = backend._gdb_client.monitor_command.call_args_list
+        assert calls[0][0][0] == "reset"
+        assert calls[1][0][0] == "halt"
 
-    async def test_disconnect(self):
-        backend = JLinkBackend()
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device=None,
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        await backend.disconnect()
-        assert backend._config is None
+    async def test_reset_hard(self):
+        backend = _make_connected_backend()
+        result = await backend.reset("hard")
+        assert result["mode"] == "hard"
+        backend._gdb_client.monitor_command.assert_awaited_once_with("reset 2")
 
-    async def test_mem_read(self, tmp_path):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
 
-        async def fake_run(exe, commands, **kwargs):
-            # Write some data to the temp file that savebin creates
-            for cmd in commands:
-                if cmd.startswith("savebin"):
-                    # Extract temp path from savebin command
-                    parts = cmd.split(",")
-                    path = parts[0].replace("savebin ", "").strip()
-                    Path(path).write_bytes(b"\xde\xad\xbe\xef")
-            return ("OK\n", "", 0)
-
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            side_effect=fake_run,
-        ):
-            data = await backend.mem_read(0x2000_0000, 4)
-            assert data == b"\xde\xad\xbe\xef"
+class TestJLinkBackendMemory:
+    async def test_mem_read(self):
+        backend = _make_connected_backend()
+        backend._gdb_client.read_memory = AsyncMock(return_value=b"\xde\xad\xbe\xef")
+        data = await backend.mem_read(0x2000_0000, 4)
+        assert data == b"\xde\xad\xbe\xef"
 
     async def test_mem_write(self):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            _mock_run_jlink_script("OK\n"),
-        ):
-            result = await backend.mem_write(0x2000_0000, b"\x01\x02\x03\x04")
-            assert result["length"] == 4
-            assert result["address"] == 0x2000_0000
+        backend = _make_connected_backend()
+        result = await backend.mem_write(0x2000_0000, b"\x01\x02\x03\x04")
+        assert result["length"] == 4
+        assert result["address"] == 0x2000_0000
+        backend._gdb_client.write_memory.assert_awaited_once()
 
+
+class TestJLinkBackendBreakpoints:
+    async def test_set_breakpoint_hw(self):
+        backend = _make_connected_backend()
+        result = await backend.set_breakpoint(0x0800_0100, "hw")
+        assert result["address"] == 0x0800_0100
+        assert result["bp_type"] == "hw"
+        backend._gdb_client.set_breakpoint.assert_awaited_once_with(1, 0x0800_0100)
+
+    async def test_set_breakpoint_sw(self):
+        backend = _make_connected_backend()
+        result = await backend.set_breakpoint(0x0800_0100, "sw")
+        assert result["bp_type"] == "sw"
+        backend._gdb_client.set_breakpoint.assert_awaited_once_with(0, 0x0800_0100)
+
+    async def test_clear_breakpoint(self):
+        backend = _make_connected_backend()
+        result = await backend.clear_breakpoint(0x0800_0100)
+        assert result["address"] == 0x0800_0100
+
+    async def test_clear_breakpoint_failure(self):
+        backend = _make_connected_backend()
+        backend._gdb_client.clear_breakpoint = AsyncMock(side_effect=GdbProtocolError("nope"))
+        with pytest.raises(ConnectionError, match="Failed to clear"):
+            await backend.clear_breakpoint(0x0800_0100)
+
+    async def test_list_breakpoints(self):
+        backend = _make_connected_backend()
+        result = await backend.list_breakpoints()
+        assert result == []
+
+
+class TestJLinkBackendFlash:
     async def test_flash_hex(self, tmp_path):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
+        backend = _make_connected_backend()
         fw = tmp_path / "firmware.hex"
         fw.write_text(":00000001FF\n")
 
         with patch(
             "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            _mock_run_jlink_script("Programmed OK\n"),
+            AsyncMock(return_value=("Programmed OK\n", "", 0)),
         ):
+            # Mock _start_gdbserver to avoid actually spawning
+            backend._start_gdbserver = AsyncMock()
             result = await backend.flash(str(fw))
             assert result["verified"] is True
             assert result["reset"] is True
+            assert result["breakpoints_cleared"] is True
+            # GDB client should have been closed and restarted
+            backend._start_gdbserver.assert_awaited_once()
 
     async def test_flash_bin_requires_addr(self, tmp_path):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
+        backend = _make_connected_backend()
         fw = tmp_path / "firmware.bin"
         fw.write_bytes(b"\x00" * 16)
 
@@ -486,59 +498,25 @@ class TestJLinkBackend:
             await backend.flash(str(fw))
 
     async def test_flash_bin_with_addr(self, tmp_path):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
+        backend = _make_connected_backend()
         fw = tmp_path / "firmware.bin"
         fw.write_bytes(b"\x00" * 16)
 
         with patch(
             "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            _mock_run_jlink_script("Programmed OK\n"),
+            AsyncMock(return_value=("Programmed OK\n", "", 0)),
         ):
+            backend._start_gdbserver = AsyncMock()
             result = await backend.flash(str(fw), addr=0x0800_0000)
             assert result["verified"] is True
 
     async def test_flash_file_not_found(self):
-        backend = JLinkBackend()
-        backend._exe = "/usr/bin/JLinkExe"
-        backend._config = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
+        backend = _make_connected_backend()
         with pytest.raises(FileNotFoundError, match="not found"):
             await backend.flash("/nonexistent/firmware.hex")
 
-    async def test_connect_raises_device_secured(self):
-        backend = JLinkBackend()
-        cfg = ConnectConfig(
-            backend="jlink",
-            device="nRF52840_xxAA",
-            interface="SWD",
-            speed_khz=4000,
-            probe_serial=None,
-        )
-        with (
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
-            patch(
-                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-                _mock_run_jlink_script("Cannot connect to target. Device is secured. APPROTECT enabled."),
-            ),
-            pytest.raises(DeviceSecuredError, match="secured"),
-        ):
-            await backend.connect(cfg)
 
+class TestJLinkBackendErase:
     async def test_erase_success(self):
         backend = JLinkBackend()
         cfg = ConnectConfig(
@@ -554,12 +532,11 @@ class TestJLinkBackend:
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-                _mock_run_jlink_script("Erasing device...\nErasing done.\n"),
+                AsyncMock(return_value=("Erasing device...\nErasing done.\n", "", 0)),
             ) as mock,
         ):
             result = await backend.erase(cfg)
             assert "resolved_paths" in result
-            # Verify erase + reset commands were sent
             call_args = mock.call_args
             commands = call_args[0][1]
             assert "erase" in commands
@@ -567,7 +544,6 @@ class TestJLinkBackend:
             assert "q" in commands
 
     async def test_erase_no_confirmation_raises(self):
-        """Erase without 'Erasing done' in output should raise — not silently succeed."""
         backend = JLinkBackend()
         cfg = ConnectConfig(
             backend="jlink",
@@ -582,14 +558,13 @@ class TestJLinkBackend:
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-                _mock_run_jlink_script("Device is secured. APPROTECT enabled."),
+                AsyncMock(return_value=("Device is secured. APPROTECT enabled.", "", 0)),
             ),
             pytest.raises(ConnectionError),
         ):
             await backend.erase(cfg)
 
     async def test_erase_generic_failure_raises(self):
-        """Erase with no confirmation and no specific error gives generic failure."""
         backend = JLinkBackend()
         cfg = ConnectConfig(
             backend="jlink",
@@ -604,7 +579,7 @@ class TestJLinkBackend:
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-                _mock_run_jlink_script("Some unexpected output with no confirmation."),
+                AsyncMock(return_value=("Some unexpected output with no confirmation.", "", 0)),
             ),
             pytest.raises(ConnectionError, match="did not complete"),
         ):
@@ -625,7 +600,7 @@ class TestJLinkBackend:
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-                _mock_run_jlink_script("Erasing range...\nErasing done.\n"),
+                AsyncMock(return_value=("Erasing range...\nErasing done.\n", "", 0)),
             ) as mock,
         ):
             result = await backend.erase(cfg, start_addr=0x00040000, end_addr=0x00080000)
@@ -653,6 +628,14 @@ class TestJLinkBackend:
         ):
             await backend.erase(cfg)
 
+
+class TestJLinkBackendDisconnect:
+    async def test_disconnect(self):
+        backend = _make_connected_backend()
+        await backend.disconnect()
+        assert backend._config is None
+        assert backend._gdb_client is None
+
     async def test_not_connected_raises(self):
         backend = JLinkBackend()
         with pytest.raises(ConnectionError, match="Not connected"):
@@ -666,7 +649,6 @@ class TestJLinkBackend:
 
 class TestGlobalRegistry:
     def test_jlink_registered(self):
-        # Import backends to trigger registration
         import dbgprobe_mcp_server.backends  # noqa: F401
         from dbgprobe_mcp_server.backend import registry
 

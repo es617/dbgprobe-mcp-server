@@ -17,7 +17,7 @@ from dbgprobe_mcp_server.helpers import (
     _err,
     _ok,
 )
-from dbgprobe_mcp_server.state import DbgProbeSession, ProbeState
+from dbgprobe_mcp_server.state import Breakpoint, DbgProbeSession, ProbeState
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -265,6 +265,83 @@ TOOLS: list[Tool] = [
             "required": ["session_id", "address"],
         },
     ),
+    Tool(
+        name="dbgprobe.step",
+        description=(
+            "Single-step one instruction. Target must be halted first. Returns the new PC and stop reason."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+            },
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="dbgprobe.status",
+        description=(
+            "Query target state. Returns whether the target is running or halted, "
+            "and if halted, the current PC and stop reason (e.g. breakpoint hit)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+            },
+            "required": ["session_id"],
+        },
+    ),
+    Tool(
+        name="dbgprobe.breakpoint.set",
+        description=(
+            "Set a hardware or software breakpoint at a target address. "
+            "Hardware breakpoints (default) are limited in number but work on flash. "
+            "Software breakpoints modify memory and only work in RAM."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "address": {
+                    "type": "integer",
+                    "description": "Address to set the breakpoint at (e.g. 0x08000100).",
+                },
+                "bp_type": {
+                    "type": "string",
+                    "enum": ["hw", "sw"],
+                    "description": "Breakpoint type: 'hw' (hardware, default) or 'sw' (software).",
+                },
+            },
+            "required": ["session_id", "address"],
+        },
+    ),
+    Tool(
+        name="dbgprobe.breakpoint.clear",
+        description="Clear a breakpoint at a target address.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "address": {
+                    "type": "integer",
+                    "description": "Address of the breakpoint to clear.",
+                },
+            },
+            "required": ["session_id", "address"],
+        },
+    ),
+    Tool(
+        name="dbgprobe.breakpoint.list",
+        description="List all active breakpoints for a session.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+            },
+            "required": ["session_id"],
+        },
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -416,6 +493,11 @@ async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
     reset_after = args.get("reset_after", True)
 
     result = await session.backend.flash(path, addr=addr, verify=verify, reset_after=reset_after)
+
+    # Flashing new firmware invalidates all breakpoints.
+    if session.breakpoints:
+        session.breakpoints.clear()
+
     return _ok(session_id=args["session_id"], **result)
 
 
@@ -483,6 +565,63 @@ async def handle_mem_write(state: ProbeState, args: dict[str, Any]) -> dict[str,
     return _ok(session_id=args["session_id"], **result)
 
 
+async def handle_step(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
+    session = state.get_session(args["session_id"])
+    try:
+        result = await session.backend.step()
+    except NotImplementedError:
+        return _err("not_supported", "step() is not supported by this backend.")
+    return _ok(session_id=args["session_id"], **result)
+
+
+async def handle_status(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
+    session = state.get_session(args["session_id"])
+    try:
+        result = await session.backend.status()
+    except NotImplementedError:
+        return _err("not_supported", "status() is not supported by this backend.")
+    return _ok(session_id=args["session_id"], **result)
+
+
+async def handle_breakpoint_set(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
+    session = state.get_session(args["session_id"])
+    address = args["address"]
+    bp_type = args.get("bp_type", "hw")
+
+    if bp_type not in ("hw", "sw"):
+        return _err("invalid_params", f"Invalid breakpoint type: {bp_type!r}. Use 'hw' or 'sw'.")
+
+    try:
+        result = await session.backend.set_breakpoint(address, bp_type=bp_type)
+    except NotImplementedError:
+        return _err("not_supported", "Breakpoints are not supported by this backend.")
+
+    session.breakpoints[address] = Breakpoint(address=address, bp_type=bp_type)
+    return _ok(session_id=args["session_id"], **result)
+
+
+async def handle_breakpoint_clear(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
+    session = state.get_session(args["session_id"])
+    address = args["address"]
+
+    if address not in session.breakpoints:
+        return _err("not_found", f"No breakpoint at 0x{address:08x}.")
+
+    try:
+        result = await session.backend.clear_breakpoint(address)
+    except NotImplementedError:
+        return _err("not_supported", "Breakpoints are not supported by this backend.")
+
+    del session.breakpoints[address]
+    return _ok(session_id=args["session_id"], **result)
+
+
+async def handle_breakpoint_list(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
+    session = state.get_session(args["session_id"])
+    bps = [{"address": bp.address, "bp_type": bp.bp_type} for bp in session.breakpoints.values()]
+    return _ok(session_id=args["session_id"], breakpoints=bps, count=len(bps))
+
+
 HANDLERS: dict[str, Any] = {
     "dbgprobe.list_probes": handle_list_probes,
     "dbgprobe.connect": handle_connect,
@@ -494,4 +633,9 @@ HANDLERS: dict[str, Any] = {
     "dbgprobe.flash": handle_flash,
     "dbgprobe.mem.read": handle_mem_read,
     "dbgprobe.mem.write": handle_mem_write,
+    "dbgprobe.step": handle_step,
+    "dbgprobe.status": handle_status,
+    "dbgprobe.breakpoint.set": handle_breakpoint_set,
+    "dbgprobe.breakpoint.clear": handle_breakpoint_clear,
+    "dbgprobe.breakpoint.list": handle_breakpoint_list,
 }
