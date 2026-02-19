@@ -1,0 +1,125 @@
+"""Backend interface and registry for debug probe backends."""
+
+from __future__ import annotations
+
+import logging
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any
+
+logger = logging.getLogger("dbgprobe_mcp_server")
+
+
+@dataclass
+class ProbeInfo:
+    """Information about a discovered debug probe."""
+
+    serial: str
+    description: str
+    backend: str
+    extra: dict[str, Any] | None = None
+
+
+@dataclass
+class ConnectConfig:
+    """Resolved configuration for a probe session."""
+
+    backend: str
+    device: str | None
+    interface: str
+    speed_khz: int
+    probe_serial: str | None
+    extra: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "backend": self.backend,
+            "device": self.device,
+            "interface": self.interface,
+            "speed_khz": self.speed_khz,
+            "probe_serial": self.probe_serial,
+        }
+        if self.extra:
+            d["extra"] = self.extra
+        return d
+
+
+class Backend(ABC):
+    """Abstract base class for debug probe backends.
+
+    Each session gets its own Backend instance.  Implementations should store
+    resolved paths / config in ``__init__`` or ``connect``.
+    """
+
+    name: str  # e.g. "jlink", "openocd"
+
+    @abstractmethod
+    async def list_probes(self) -> list[ProbeInfo]:
+        """Enumerate attached probes for this backend."""
+
+    @abstractmethod
+    async def connect(self, config: ConnectConfig) -> dict[str, Any]:
+        """Validate connectivity and store config.
+
+        Returns a dict of extra info to include in the connect response
+        (e.g. resolved executable paths).
+        """
+
+    @abstractmethod
+    async def disconnect(self) -> None:
+        """Release resources."""
+
+    @abstractmethod
+    async def reset(self, mode: str) -> dict[str, Any]:
+        """Reset the target.  *mode* is one of ``soft``, ``hard``, ``halt``."""
+
+    @abstractmethod
+    async def halt(self) -> dict[str, Any]:
+        """Halt the CPU."""
+
+    @abstractmethod
+    async def go(self) -> dict[str, Any]:
+        """Resume execution."""
+
+    @abstractmethod
+    async def flash(
+        self,
+        path: str,
+        addr: int | None = None,
+        verify: bool = True,
+        reset_after: bool = True,
+    ) -> dict[str, Any]:
+        """Program a firmware image."""
+
+    @abstractmethod
+    async def mem_read(self, address: int, length: int) -> bytes:
+        """Read *length* bytes starting at *address*."""
+
+    @abstractmethod
+    async def mem_write(self, address: int, data: bytes) -> dict[str, Any]:
+        """Write *data* starting at *address*."""
+
+
+class BackendRegistry:
+    """Factory that maps backend names to classes."""
+
+    def __init__(self) -> None:
+        self._backends: dict[str, type[Backend]] = {}
+
+    def register(self, name: str, cls: type[Backend]) -> None:
+        self._backends[name] = cls
+
+    def create(self, name: str) -> Backend:
+        cls = self._backends.get(name)
+        if cls is None:
+            available = ", ".join(sorted(self._backends)) or "(none)"
+            raise ValueError(f"Unknown backend {name!r}. Available: {available}")
+        return cls()
+
+    @property
+    def available(self) -> list[str]:
+        return sorted(self._backends)
+
+
+# Global singleton
+registry = BackendRegistry()

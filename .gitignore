@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.pytest_cache/
+.venv/
+dbgprobe_mcp_server/_version.py
+coverage.md
+.coverage
+.DS_Store
+.mcpregistry_*
+.dbgprobe_mcp/
