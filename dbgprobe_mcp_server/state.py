@@ -14,6 +14,14 @@ logger = logging.getLogger("dbgprobe_mcp_server")
 
 
 @dataclass
+class Breakpoint:
+    """A breakpoint set on the target."""
+
+    address: int
+    bp_type: str  # "hw" or "sw"
+
+
+@dataclass
 class DbgProbeSession:
     """A managed debug probe session."""
 
@@ -23,6 +31,7 @@ class DbgProbeSession:
     spec: dict[str, Any] | None = None
     created_at: float = field(default_factory=time.time)
     extra: dict[str, Any] = field(default_factory=dict)
+    breakpoints: dict[int, Breakpoint] = field(default_factory=dict)  # addr -> Breakpoint
 
     @property
     def backend_name(self) -> str:

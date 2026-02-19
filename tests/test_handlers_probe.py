@@ -8,6 +8,9 @@ import pytest
 
 from dbgprobe_mcp_server.backend import Backend, ConnectConfig, DeviceSecuredError, ProbeInfo
 from dbgprobe_mcp_server.handlers_probe import (
+    handle_breakpoint_clear,
+    handle_breakpoint_list,
+    handle_breakpoint_set,
     handle_connect,
     handle_disconnect,
     handle_erase,
@@ -18,8 +21,10 @@ from dbgprobe_mcp_server.handlers_probe import (
     handle_mem_read,
     handle_mem_write,
     handle_reset,
+    handle_status,
+    handle_step,
 )
-from dbgprobe_mcp_server.state import DbgProbeSession, ProbeState
+from dbgprobe_mcp_server.state import Breakpoint, DbgProbeSession, ProbeState
 
 # ---------------------------------------------------------------------------
 # Mock backend
@@ -53,7 +58,7 @@ class MockBackend(Backend):
         return {}
 
     async def flash(self, path, addr=None, verify=True, reset_after=True):
-        return {"file": path, "verified": verify, "reset": reset_after}
+        return {"file": path, "verified": verify, "reset": reset_after, "breakpoints_cleared": True}
 
     async def mem_read(self, address, length):
         return bytes(range(length % 256))
@@ -63,6 +68,21 @@ class MockBackend(Backend):
 
     async def erase(self, config, start_addr=None, end_addr=None):
         return {"resolved_paths": {"mock_exe": "/mock/path"}}
+
+    async def step(self):
+        return {"pc": 0x0800_0100, "reason": "step", "signal": 5}
+
+    async def status(self):
+        return {"state": "halted", "pc": 0x0800_0200, "reason": "halted", "signal": 5}
+
+    async def set_breakpoint(self, address, bp_type="hw"):
+        return {"address": address, "bp_type": bp_type}
+
+    async def clear_breakpoint(self, address):
+        return {"address": address}
+
+    async def list_breakpoints(self):
+        return []
 
 
 class SecuredMockBackend(MockBackend):
@@ -419,6 +439,138 @@ class TestMemWrite:
         )
         assert result["ok"] is False
         assert result["error"]["code"] == "invalid_params"
+
+
+class TestStep:
+    async def test_success(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_step(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert result["pc"] == 0x0800_0100
+        assert result["reason"] == "step"
+
+    async def test_not_supported(self):
+        """Backend without step() returns not_supported error."""
+        state = ProbeState()
+        sid, session = _make_session(state)
+
+        # Replace with a backend that doesn't override step()
+        class NoStepBackend(MockBackend):
+            async def step(self):
+                raise NotImplementedError("step() not supported by this backend")
+
+        session.backend = NoStepBackend()
+        result = await handle_step(state, {"session_id": sid})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "not_supported"
+
+
+class TestStatus:
+    async def test_success(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_status(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert result["state"] == "halted"
+
+    async def test_not_supported(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+
+        class NoStatusBackend(MockBackend):
+            async def status(self):
+                raise NotImplementedError("status() not supported by this backend")
+
+        session.backend = NoStatusBackend()
+        result = await handle_status(state, {"session_id": sid})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "not_supported"
+
+
+class TestBreakpointSet:
+    async def test_success(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        result = await handle_breakpoint_set(state, {"session_id": sid, "address": 0x0800_0100})
+        assert result["ok"] is True
+        assert result["address"] == 0x0800_0100
+        assert result["bp_type"] == "hw"
+        assert 0x0800_0100 in session.breakpoints
+        assert session.breakpoints[0x0800_0100].bp_type == "hw"
+
+    async def test_software_breakpoint(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        result = await handle_breakpoint_set(
+            state, {"session_id": sid, "address": 0x2000_0000, "bp_type": "sw"}
+        )
+        assert result["ok"] is True
+        assert result["bp_type"] == "sw"
+        assert session.breakpoints[0x2000_0000].bp_type == "sw"
+
+    async def test_invalid_type(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_breakpoint_set(
+            state, {"session_id": sid, "address": 0x0800_0100, "bp_type": "bad"}
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_params"
+
+
+class TestBreakpointClear:
+    async def test_success(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        # First set a breakpoint
+        session.breakpoints[0x0800_0100] = Breakpoint(address=0x0800_0100, bp_type="hw")
+        result = await handle_breakpoint_clear(state, {"session_id": sid, "address": 0x0800_0100})
+        assert result["ok"] is True
+        assert 0x0800_0100 not in session.breakpoints
+
+    async def test_not_found(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_breakpoint_clear(state, {"session_id": sid, "address": 0xDEAD_BEEF})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "not_found"
+
+
+class TestBreakpointList:
+    async def test_empty(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_breakpoint_list(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert result["breakpoints"] == []
+        assert result["count"] == 0
+
+    async def test_with_breakpoints(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        session.breakpoints[0x0800_0100] = Breakpoint(address=0x0800_0100, bp_type="hw")
+        session.breakpoints[0x0800_0200] = Breakpoint(address=0x0800_0200, bp_type="sw")
+        result = await handle_breakpoint_list(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert result["count"] == 2
+        addrs = {bp["address"] for bp in result["breakpoints"]}
+        assert addrs == {0x0800_0100, 0x0800_0200}
+
+
+class TestFlashClearsBreakpoints:
+    async def test_flash_clears_breakpoints(self, tmp_path):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        fw = tmp_path / "test.hex"
+        fw.write_text(":00000001FF\n")
+        # Set a breakpoint
+        session.breakpoints[0x0800_0100] = Breakpoint(address=0x0800_0100, bp_type="hw")
+        assert len(session.breakpoints) == 1
+
+        result = await handle_flash(state, {"session_id": sid, "path": str(fw)})
+        assert result["ok"] is True
+        assert session.breakpoints == {}
 
 
 class TestHandlersIntrospection:

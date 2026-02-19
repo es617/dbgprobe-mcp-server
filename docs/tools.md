@@ -264,6 +264,127 @@ Example with u32:
 }
 ```
 
+### dbgprobe.step
+
+Single-step one instruction. Target must be halted first.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "pc": 134218000,
+  "reason": "breakpoint",
+  "signal": 5
+}
+```
+
+### dbgprobe.status
+
+Query target state — running or halted.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Returns (halted):
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "state": "halted",
+  "pc": 134218000,
+  "reason": "breakpoint",
+  "signal": 5
+}
+```
+
+Returns (running):
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "state": "running"
+}
+```
+
+### dbgprobe.breakpoint.set
+
+Set a hardware or software breakpoint at a target address.
+
+```json
+{
+  "session_id": "p1a2b3c4",
+  "address": 134218000,
+  "bp_type": "hw"
+}
+```
+
+`bp_type` is optional (default: `hw`). Options:
+- `hw` — hardware breakpoint (limited in number, works on flash)
+- `sw` — software breakpoint (modifies memory, RAM only)
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "address": 134218000,
+  "bp_type": "hw"
+}
+```
+
+### dbgprobe.breakpoint.clear
+
+Clear a breakpoint at a target address.
+
+```json
+{
+  "session_id": "p1a2b3c4",
+  "address": 134218000
+}
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "address": 134218000
+}
+```
+
+### dbgprobe.breakpoint.list
+
+List all active breakpoints for a session.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "breakpoints": [
+    { "address": 134218000, "bp_type": "hw" },
+    { "address": 536870912, "bp_type": "sw" }
+  ],
+  "count": 2
+}
+```
+
 ---
 
 ## Introspection
