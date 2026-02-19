@@ -200,7 +200,11 @@ def _check_error(stdout: str, stderr: str) -> str | None:
     lower = combined.lower()
     if _is_device_secured(stdout, stderr):
         return "Target device is secured. Use dbgprobe.erase to mass-erase and unlock."
-    if "inittarget()" in lower and "error" in lower:
+    if (
+        "inittarget() error" in lower
+        or "inittarget(): error" in lower
+        or "inittarget() returned with error" in lower
+    ):
         return (
             "InitTarget() failed. The device string may be wrong — "
             "note that the probe name (e.g. OB-nRF5340) refers to the debugger MCU, "
@@ -418,7 +422,7 @@ class JLinkBackend(Backend):
         if mode == "halt":
             commands = ["r", "h", "q"]
         elif mode == "hard":
-            commands = ["hwreset", "q"]
+            commands = ["RSetType 2", "r", "g", "q"]
         else:
             commands = ["r", "g", "q"]
 

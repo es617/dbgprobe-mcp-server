@@ -115,6 +115,19 @@ class TestCheckError:
         assert "InitTarget" in err
         assert "probe name" in err.lower()
 
+    def test_inittarget_success_no_false_positive(self):
+        """Normal InitTarget() start/end with 'exit on Error' should NOT trigger."""
+        err = _check_error(
+            "J-Link Commander will now exit on Error\n"
+            "InitTarget() start\n"
+            "InitTarget() end - Took 4.23ms\n"
+            "Found SW-DP with ID 0x2BA01477\n"
+            "Cortex-M4 identified.\n"
+            "Script processing completed.\n",
+            "",
+        )
+        assert err is None
+
     def test_cannot_connect(self):
         err = _check_error("Cannot connect to target", "")
         assert err is not None
