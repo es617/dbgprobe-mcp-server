@@ -276,9 +276,9 @@ async def _run_jlink_script(
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await _kill_process(proc)
-            raise TimeoutError(f"JLinkExe timed out after {timeout}s")
+            raise TimeoutError(f"JLinkExe timed out after {timeout}s") from None
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
 
@@ -302,7 +302,7 @@ async def _kill_process(proc: asyncio.subprocess.Process) -> None:
         return
     try:
         await asyncio.wait_for(proc.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass
 
 
@@ -321,9 +321,9 @@ async def _run_jlink_list_probes(exe: str, timeout: float = 15.0) -> tuple[str, 
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await _kill_process(proc)
-            raise TimeoutError(f"JLinkExe timed out after {timeout}s")
+            raise TimeoutError(f"JLinkExe timed out after {timeout}s") from None
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
         return stdout, stderr, proc.returncode or 0
@@ -569,9 +569,7 @@ class JLinkBackend(Backend):
             err_msg = _check_error(stdout, stderr)
             if err_msg:
                 raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
-            raise ConnectionError(
-                f"Erase did not complete successfully.\n\n[JLink output]\n{stdout.strip()}"
-            )
+            raise ConnectionError(f"Erase did not complete successfully.\n\n[JLink output]\n{stdout.strip()}")
 
         return {"resolved_paths": paths}
 
