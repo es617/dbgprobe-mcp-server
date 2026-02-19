@@ -6,16 +6,30 @@ How the Debug Probe MCP server works, and how the pieces fit together.
 
 ## Architecture
 
-The server gives an AI agent (like Claude) a set of debug probe tools over the MCP protocol. The agent uses these tools to interact with embedded targets — listing probes, connecting, flashing firmware, reading/writing memory, and controlling execution.
+The server gives an AI agent (like Claude) a set of debug probe tools over the MCP protocol. The agent uses these tools to interact with embedded targets — listing probes, connecting, flashing firmware, reading/writing memory, setting breakpoints, and controlling execution.
 
 Everything is **stateful**: sessions persist across tool calls. The agent doesn't have to reconnect between each operation.
 
 ```
-┌─────────────┐       stdio/MCP        ┌─────────────────────┐   subprocess    ┌──────────┐     SWD/JTAG    ┌────────┐
-│  AI Agent   │ ◄────────────────────► │  Debug Probe MCP    │ ◄────────────► │ JLinkExe │ ◄──────────────► │ Target │
-│ (Claude etc)│   structured JSON      │  Server             │   cmd scripts  │          │    debug probe   │  MCU   │
-└─────────────┘                        └─────────────────────┘                └──────────┘                  └────────┘
+┌─────────────┐       stdio/MCP        ┌─────────────────────┐  GDB RSP (TCP)  ┌────────────────┐   USB    ┌──────────┐
+│  AI Agent   │ ◄────────────────────► │  Debug Probe MCP    │ ◄──────────────► │ JLinkGDBServer │ ◄──────► │          │  SWD/JTAG  ┌────────┐
+│ (Claude etc)│   structured JSON      │  Server             │   persistent     │ (persistent)   │          │  J-Link  │ ◄────────► │ Target │
+└─────────────┘                        │                     │                  └────────────────┘          │  Probe   │            │  MCU   │
+                                       │                     │  subprocess       ┌────────────────┐          │          │            └────────┘
+                                       │                     │ ◄──────────────► │ JLinkExe       │ ◄──────► │          │
+                                       └─────────────────────┘  one-shot        │ (flash/erase)  │   USB    └──────────┘
+                                                                                └────────────────┘
 ```
+
+### Hybrid approach: GDBServer + JLinkExe
+
+The J-Link backend uses two SEGGER tools concurrently:
+
+- **JLinkGDBServer** — persistent process, speaks GDB Remote Serial Protocol over TCP. Handles all session operations: halt, go, step, memory read/write, breakpoints, reset. Gives low-latency access through an open TCP socket.
+
+- **JLinkExe** (Commander) — one-shot subprocess for flash and erase. Supports all firmware formats (.hex, .elf, .bin) natively. Also used for `list_probes` (session-less).
+
+SEGGER's J-Link software supports multiple simultaneous connections to the same probe, so JLinkExe can flash while JLinkGDBServer holds a persistent connection — no teardown needed.
 
 ### Backend abstraction
 
@@ -23,34 +37,24 @@ The server is backend-agnostic. A `Backend` abstract class defines the interface
 
 ```
 Backend (ABC)
-  ├── JLinkBackend    ← implemented (v0)
+  ├── JLinkBackend    ← implemented (hybrid GDBServer + JLinkExe)
   ├── OpenOCDBackend  ← planned
   └── PyOCDBackend    ← planned
 ```
 
 Tool names (`dbgprobe.*`) stay the same regardless of backend. The backend is selected via `DBGPROBE_BACKEND` env var or the `backend` argument to `dbgprobe.connect`.
 
-### How J-Link operations work
-
-Each operation (halt, reset, flash, mem.read, etc.) is a **one-shot subprocess call** to JLinkExe:
-
-1. Generate a temporary `.jlink` command script file
-2. Run `JLinkExe -Device ... -If SWD -Speed 4000 -CommandFile script.jlink`
-3. Parse stdout/stderr for results or errors
-4. Clean up temp files
-
-This is simple and reliable — no persistent process to manage. The tradeoff is slightly higher latency per operation compared to a persistent connection.
-
 ### Sessions
 
 A session represents a connection to a specific probe + target combination. Created by `dbgprobe.connect`, it stores:
 
-- The backend instance (e.g. JLinkBackend)
+- The backend instance (e.g. JLinkBackend with live GDBServer + GDB client)
 - Resolved configuration (device, interface, speed, probe serial)
+- Active breakpoints (tracked in session state)
 - Optional attached protocol spec
 - Timestamps
 
-Multiple sessions can be open simultaneously (up to 10 by default).
+Multiple sessions can be open simultaneously (up to 10 by default). Each session gets its own GDBServer process and TCP port.
 
 ---
 
