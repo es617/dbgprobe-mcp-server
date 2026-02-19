@@ -480,14 +480,13 @@ class TestJLinkBackendFlash:
             "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
             AsyncMock(return_value=("Programmed OK\n", "", 0)),
         ):
-            # Mock _start_gdbserver to avoid actually spawning
-            backend._start_gdbserver = AsyncMock()
             result = await backend.flash(str(fw))
             assert result["verified"] is True
             assert result["reset"] is True
             assert result["breakpoints_cleared"] is True
-            # GDB client should have been closed and restarted
-            backend._start_gdbserver.assert_awaited_once()
+            # GDBServer stays running — no teardown/reconnect needed
+            backend._gdb_client.monitor_command.assert_awaited()
+            backend._gdb_client.continue_execution.assert_awaited()
 
     async def test_flash_bin_requires_addr(self, tmp_path):
         backend = _make_connected_backend()
@@ -506,7 +505,6 @@ class TestJLinkBackendFlash:
             "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
             AsyncMock(return_value=("Programmed OK\n", "", 0)),
         ):
-            backend._start_gdbserver = AsyncMock()
             result = await backend.flash(str(fw), addr=0x0800_0000)
             assert result["verified"] is True
 
