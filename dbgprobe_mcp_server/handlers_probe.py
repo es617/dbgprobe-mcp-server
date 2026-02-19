@@ -8,7 +8,7 @@ from typing import Any
 
 from mcp.types import Tool
 
-from dbgprobe_mcp_server.backend import ConnectConfig, registry
+from dbgprobe_mcp_server.backend import ConnectConfig, DeviceSecuredError, registry
 from dbgprobe_mcp_server.helpers import (
     DBGPROBE_BACKEND,
     DBGPROBE_INTERFACE,
@@ -60,7 +60,12 @@ TOOLS: list[Tool] = [
                 },
                 "device": {
                     "type": "string",
-                    "description": "Target device string (e.g. nRF52840_xxAA). Overrides DBGPROBE_JLINK_DEVICE.",
+                    "description": (
+                        "Target device string (e.g. nRF52840_xxAA). This is the TARGET chip "
+                        "on the board, not the debug probe MCU. The probe name (e.g. "
+                        "OB-nRF5340) refers to the debugger, not the target. "
+                        "Overrides DBGPROBE_JLINK_DEVICE."
+                    ),
                 },
                 "interface": {
                     "type": "string",
@@ -70,6 +75,50 @@ TOOLS: list[Tool] = [
                 "speed_khz": {
                     "type": "integer",
                     "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ, typically 4000).",
+                },
+            },
+            "required": [],
+        },
+    ),
+    Tool(
+        name="dbgprobe.erase",
+        description=(
+            "Erase target flash. With no address params: full chip erase (unlocks "
+            "secured/read-protected devices like Nordic APPROTECT). With start_addr "
+            "and end_addr: erase only that range. Does not require a session. "
+            "Use when dbgprobe.connect returns device_secured."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "backend": {
+                    "type": "string",
+                    "description": "Backend to use (default from DBGPROBE_BACKEND env var).",
+                },
+                "probe_id": {
+                    "type": "string",
+                    "description": "Serial number of the probe to use.",
+                },
+                "device": {
+                    "type": "string",
+                    "description": "Target device string (e.g. nRF52840_xxAA).",
+                },
+                "interface": {
+                    "type": "string",
+                    "enum": ["swd", "jtag"],
+                    "description": "Debug interface (default from DBGPROBE_INTERFACE).",
+                },
+                "speed_khz": {
+                    "type": "integer",
+                    "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ).",
+                },
+                "start_addr": {
+                    "type": "integer",
+                    "description": "Start address for range erase (e.g. 0x00040000). Omit for full chip erase.",
+                },
+                "end_addr": {
+                    "type": "integer",
+                    "description": "End address for range erase (e.g. 0x00080000). Required if start_addr is set.",
                 },
             },
             "required": [],
@@ -266,6 +315,8 @@ async def handle_connect(state: ProbeState, args: dict[str, Any]) -> dict[str, A
         connect_info = await backend.connect(config)
     except FileNotFoundError as exc:
         return _err("exe_not_found", str(exc))
+    except DeviceSecuredError as exc:
+        return _err("device_secured", str(exc))
     except ConnectionError as exc:
         return _err("connect_failed", str(exc))
 
@@ -282,6 +333,43 @@ async def handle_connect(state: ProbeState, args: dict[str, Any]) -> dict[str, A
         config=config.to_dict(),
         **connect_info,
     )
+
+
+async def handle_erase(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
+    backend_name = args.get("backend", DBGPROBE_BACKEND)
+    try:
+        backend = registry.create(backend_name)
+    except ValueError as exc:
+        return _err("invalid_backend", str(exc))
+
+    config = ConnectConfig(
+        backend=backend_name,
+        device=args.get("device") or DBGPROBE_JLINK_DEVICE,
+        interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
+        speed_khz=args.get("speed_khz") or DBGPROBE_SPEED_KHZ,
+        probe_serial=args.get("probe_id"),
+    )
+
+    start_addr = args.get("start_addr")
+    end_addr = args.get("end_addr")
+
+    if (start_addr is None) != (end_addr is None):
+        return _err("invalid_params", "Both start_addr and end_addr are required for range erase.")
+    if start_addr is not None and end_addr is not None and start_addr >= end_addr:
+        return _err("invalid_params", "start_addr must be less than end_addr.")
+
+    try:
+        erase_info = await backend.erase(config, start_addr=start_addr, end_addr=end_addr)
+    except FileNotFoundError as exc:
+        return _err("exe_not_found", str(exc))
+    except ConnectionError as exc:
+        return _err("erase_failed", str(exc))
+
+    result_kwargs: dict[str, Any] = {"erased": True, "config": config.to_dict()}
+    if start_addr is not None:
+        result_kwargs["start_addr"] = start_addr
+        result_kwargs["end_addr"] = end_addr
+    return _ok(**result_kwargs, **erase_info)
 
 
 async def handle_disconnect(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
@@ -398,6 +486,7 @@ async def handle_mem_write(state: ProbeState, args: dict[str, Any]) -> dict[str,
 HANDLERS: dict[str, Any] = {
     "dbgprobe.list_probes": handle_list_probes,
     "dbgprobe.connect": handle_connect,
+    "dbgprobe.erase": handle_erase,
     "dbgprobe.disconnect": handle_disconnect,
     "dbgprobe.reset": handle_reset,
     "dbgprobe.halt": handle_halt,

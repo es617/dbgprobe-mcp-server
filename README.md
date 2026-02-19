@@ -90,7 +90,7 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 
 | Category | Tools |
 |---|---|
-| **Probe** | `dbgprobe.list_probes`, `dbgprobe.connect`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write` |
+| **Probe** | `dbgprobe.list_probes`, `dbgprobe.connect`, `dbgprobe.erase`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write` |
 | **Introspection** | `dbgprobe.connections.list` |
 | **Protocol Specs** | `dbgprobe.spec.template`, `dbgprobe.spec.register`, `dbgprobe.spec.list`, `dbgprobe.spec.attach`, `dbgprobe.spec.get`, `dbgprobe.spec.read`, `dbgprobe.spec.search` |
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
@@ -203,8 +203,6 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 - [ ] **Breakpoint/watchpoint support** — set and manage hardware breakpoints
 - [ ] **GDB integration** — launch and manage GDB sessions through the probe
 - [ ] **Multi-core support** — target specific cores on multi-core SoCs
-- [ ] **Flash erase** — standalone erase tool (currently erase happens implicitly during flash)
-
 ---
 
 ## Known limitations

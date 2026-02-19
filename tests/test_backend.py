@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dbgprobe_mcp_server.backend import Backend, BackendRegistry, ConnectConfig, ProbeInfo
+from dbgprobe_mcp_server.backend import Backend, BackendRegistry, ConnectConfig, DeviceSecuredError, ProbeInfo
 
 
 class DummyBackend(Backend):
@@ -38,6 +38,9 @@ class DummyBackend(Backend):
 
     async def mem_write(self, address, data):
         return {"address": address, "length": len(data)}
+
+    async def erase(self, config, start_addr=None, end_addr=None):
+        return {}
 
 
 class TestBackendRegistry:
@@ -102,6 +105,16 @@ class TestConnectConfig:
         )
         d = cfg.to_dict()
         assert d["extra"] == {"foo": "bar"}
+
+
+class TestDeviceSecuredError:
+    def test_is_connection_error(self):
+        exc = DeviceSecuredError("secured")
+        assert isinstance(exc, ConnectionError)
+
+    def test_message(self):
+        exc = DeviceSecuredError("Target is secured")
+        assert str(exc) == "Target is secured"
 
 
 class TestProbeInfo:

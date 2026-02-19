@@ -8,10 +8,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from dbgprobe_mcp_server.backend import ConnectConfig
+from dbgprobe_mcp_server.backend import ConnectConfig, DeviceSecuredError
 from dbgprobe_mcp_server.backends.jlink import (
     JLinkBackend,
     _check_error,
+    _is_device_secured,
     _parse_probe_list,
     find_jlink_exe,
 )
@@ -73,7 +74,47 @@ class TestParseProbeList:
 # ---------------------------------------------------------------------------
 
 
+class TestIsDeviceSecured:
+    @pytest.mark.parametrize(
+        "output",
+        [
+            "Device is secured. Cannot connect.",
+            "APPROTECT is enabled on this device.",
+            "The device is read protected.",
+            "Protection enabled — mass erase required.",
+            "Secure element detected, cannot access.",
+            "Please unlock the device before connecting.",
+        ],
+    )
+    def test_secured_true(self, output):
+        assert _is_device_secured(output, "") is True
+
+    def test_secured_in_stderr(self):
+        assert _is_device_secured("", "Device is secured") is True
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            "Connected OK\nHalting...",
+            "All good. Connected to target.",
+            "",
+        ],
+    )
+    def test_secured_false(self, output):
+        assert _is_device_secured(output, "") is False
+
+
 class TestCheckError:
+    def test_inittarget_error(self):
+        err = _check_error(
+            "InitTarget() end\n****** Error: J-Link script file function "
+            "InitTarget() returned with error code -1",
+            "",
+        )
+        assert err is not None
+        assert "InitTarget" in err
+        assert "probe name" in err.lower()
+
     def test_cannot_connect(self):
         err = _check_error("Cannot connect to target", "")
         assert err is not None
@@ -95,6 +136,12 @@ class TestCheckError:
     def test_unknown_device(self):
         err = _check_error("Unknown device: FOO_BAR", "")
         assert err is not None
+
+    def test_secured_takes_priority(self):
+        err = _check_error("Cannot connect to target. Device is secured.", "")
+        assert err is not None
+        assert "secured" in err.lower()
+        assert "dbgprobe.erase" in err
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +504,141 @@ class TestJLinkBackend:
         )
         with pytest.raises(FileNotFoundError, match="not found"):
             await backend.flash("/nonexistent/firmware.hex")
+
+    async def test_connect_raises_device_secured(self):
+        backend = JLinkBackend()
+        cfg = ConnectConfig(
+            backend="jlink",
+            device="nRF52840_xxAA",
+            interface="SWD",
+            speed_khz=4000,
+            probe_serial=None,
+        )
+        with (
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
+            patch(
+                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
+                _mock_run_jlink_script("Cannot connect to target. Device is secured. APPROTECT enabled."),
+            ),
+            pytest.raises(DeviceSecuredError, match="secured"),
+        ):
+            await backend.connect(cfg)
+
+    async def test_erase_success(self):
+        backend = JLinkBackend()
+        cfg = ConnectConfig(
+            backend="jlink",
+            device="nRF52840_xxAA",
+            interface="SWD",
+            speed_khz=4000,
+            probe_serial=None,
+        )
+        with (
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
+            patch(
+                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
+                _mock_run_jlink_script("Erasing device...\nErasing done.\n"),
+            ) as mock,
+        ):
+            result = await backend.erase(cfg)
+            assert "resolved_paths" in result
+            # Verify erase + reset commands were sent
+            call_args = mock.call_args
+            commands = call_args[0][1]
+            assert "erase" in commands
+            assert "r" in commands
+            assert "q" in commands
+
+    async def test_erase_no_confirmation_raises(self):
+        """Erase without 'Erasing done' in output should raise — not silently succeed."""
+        backend = JLinkBackend()
+        cfg = ConnectConfig(
+            backend="jlink",
+            device="nRF52840_xxAA",
+            interface="SWD",
+            speed_khz=4000,
+            probe_serial=None,
+        )
+        with (
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
+            patch(
+                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
+                _mock_run_jlink_script("Device is secured. APPROTECT enabled."),
+            ),
+            pytest.raises(ConnectionError),
+        ):
+            await backend.erase(cfg)
+
+    async def test_erase_generic_failure_raises(self):
+        """Erase with no confirmation and no specific error gives generic failure."""
+        backend = JLinkBackend()
+        cfg = ConnectConfig(
+            backend="jlink",
+            device="nRF52840_xxAA",
+            interface="SWD",
+            speed_khz=4000,
+            probe_serial=None,
+        )
+        with (
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
+            patch(
+                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
+                _mock_run_jlink_script("Some unexpected output with no confirmation."),
+            ),
+            pytest.raises(ConnectionError, match="did not complete"),
+        ):
+            await backend.erase(cfg)
+
+    async def test_erase_range(self):
+        backend = JLinkBackend()
+        cfg = ConnectConfig(
+            backend="jlink",
+            device="nRF52840_xxAA",
+            interface="SWD",
+            speed_khz=4000,
+            probe_serial=None,
+        )
+        with (
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
+            patch(
+                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
+                _mock_run_jlink_script("Erasing range...\nErasing done.\n"),
+            ) as mock,
+        ):
+            result = await backend.erase(cfg, start_addr=0x00040000, end_addr=0x00080000)
+            assert "resolved_paths" in result
+            call_args = mock.call_args
+            commands = call_args[0][1]
+            assert commands[0] == "erase 0x40000 0x80000"
+            assert "r" in commands
+            assert "q" in commands
+
+    async def test_erase_no_exe(self):
+        backend = JLinkBackend()
+        cfg = ConnectConfig(
+            backend="jlink",
+            device="nRF52840_xxAA",
+            interface="SWD",
+            speed_khz=4000,
+            probe_serial=None,
+        )
+        with (
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
+            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
+            pytest.raises(FileNotFoundError, match="JLinkExe not found"),
+        ):
+            await backend.erase(cfg)
 
     async def test_not_connected_raises(self):
         backend = JLinkBackend()

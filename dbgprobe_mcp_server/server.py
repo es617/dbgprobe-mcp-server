@@ -24,6 +24,7 @@ from dbgprobe_mcp_server import (
     handlers_spec,
     handlers_trace,
 )
+from dbgprobe_mcp_server.backend import DeviceSecuredError
 from dbgprobe_mcp_server.helpers import (
     _err,
     _result_text,
@@ -108,6 +109,8 @@ def build_server() -> tuple[Server, ProbeState]:
             result = _err("invalid_params", str(exc))
         except RuntimeError as exc:
             result = _err("limit_reached", str(exc))
+        except DeviceSecuredError as exc:
+            result = _err("device_secured", str(exc))
         except ConnectionError as exc:
             result = _err("disconnected", str(exc))
         except TimeoutError:

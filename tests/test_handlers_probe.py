@@ -6,10 +6,11 @@ from unittest.mock import patch
 
 import pytest
 
-from dbgprobe_mcp_server.backend import Backend, ConnectConfig, ProbeInfo
+from dbgprobe_mcp_server.backend import Backend, ConnectConfig, DeviceSecuredError, ProbeInfo
 from dbgprobe_mcp_server.handlers_probe import (
     handle_connect,
     handle_disconnect,
+    handle_erase,
     handle_flash,
     handle_go,
     handle_halt,
@@ -59,6 +60,16 @@ class MockBackend(Backend):
 
     async def mem_write(self, address, data):
         return {"address": address, "length": len(data)}
+
+    async def erase(self, config, start_addr=None, end_addr=None):
+        return {"resolved_paths": {"mock_exe": "/mock/path"}}
+
+
+class SecuredMockBackend(MockBackend):
+    """Mock backend that raises DeviceSecuredError on connect."""
+
+    async def connect(self, config):
+        raise DeviceSecuredError("Target device is secured. Use dbgprobe.erase to mass-erase and unlock.")
 
 
 def _mock_registry_create(name):
@@ -157,6 +168,75 @@ class TestConnect:
         state = ProbeState()
         with _patch_registry():
             result = await handle_connect(state, {"backend": "nope"})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_backend"
+
+    async def test_device_secured(self):
+        state = ProbeState()
+
+        def _create_secured(name):
+            if name == "mock":
+                return SecuredMockBackend()
+            raise ValueError(f"Unknown backend {name!r}")
+
+        with (
+            patch("dbgprobe_mcp_server.handlers_probe.registry.create", side_effect=_create_secured),
+            _patch_defaults(),
+        ):
+            result = await handle_connect(state, {"backend": "mock"})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "device_secured"
+        assert len(state.sessions) == 0
+
+
+class TestErase:
+    async def test_success(self):
+        state = ProbeState()
+        with _patch_registry(), _patch_defaults():
+            result = await handle_erase(state, {"backend": "mock"})
+        assert result["ok"] is True
+        assert result["erased"] is True
+        assert result["config"]["backend"] == "mock"
+        assert "start_addr" not in result
+
+    async def test_range_erase(self):
+        state = ProbeState()
+        with _patch_registry(), _patch_defaults():
+            result = await handle_erase(
+                state, {"backend": "mock", "start_addr": 0x40000, "end_addr": 0x80000}
+            )
+        assert result["ok"] is True
+        assert result["erased"] is True
+        assert result["start_addr"] == 0x40000
+        assert result["end_addr"] == 0x80000
+
+    async def test_start_addr_without_end_addr(self):
+        state = ProbeState()
+        with _patch_registry(), _patch_defaults():
+            result = await handle_erase(state, {"backend": "mock", "start_addr": 0x40000})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_params"
+
+    async def test_end_addr_without_start_addr(self):
+        state = ProbeState()
+        with _patch_registry(), _patch_defaults():
+            result = await handle_erase(state, {"backend": "mock", "end_addr": 0x80000})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_params"
+
+    async def test_start_addr_not_less_than_end_addr(self):
+        state = ProbeState()
+        with _patch_registry(), _patch_defaults():
+            result = await handle_erase(
+                state, {"backend": "mock", "start_addr": 0x80000, "end_addr": 0x40000}
+            )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_params"
+
+    async def test_unknown_backend(self):
+        state = ProbeState()
+        with _patch_registry():
+            result = await handle_erase(state, {"backend": "nope"})
         assert result["ok"] is False
         assert result["error"]["code"] == "invalid_backend"
 

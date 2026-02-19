@@ -70,6 +70,58 @@ Returns:
 }
 ```
 
+### dbgprobe.erase
+
+Erase target flash. With no address params: full chip erase (unlocks secured/read-protected devices like Nordic APPROTECT). With `start_addr` and `end_addr`: erase only that range. Does not require a session.
+
+Full chip erase:
+
+```json
+{
+  "device": "nRF52840_xxAA"
+}
+```
+
+Range erase:
+
+```json
+{
+  "device": "nRF52840_xxAA",
+  "start_addr": 262144,
+  "end_addr": 524288
+}
+```
+
+All parameters are optional. Defaults come from environment variables. `start_addr` and `end_addr` must both be provided for a range erase.
+
+Returns (full erase):
+
+```json
+{
+  "ok": true,
+  "erased": true,
+  "config": {
+    "backend": "jlink",
+    "device": "nRF52840_xxAA",
+    "interface": "SWD",
+    "speed_khz": 4000,
+    "probe_serial": null
+  }
+}
+```
+
+Returns (range erase):
+
+```json
+{
+  "ok": true,
+  "erased": true,
+  "start_addr": 262144,
+  "end_addr": 524288,
+  "config": { "..." : "..." }
+}
+```
+
 ### dbgprobe.disconnect
 
 Close a debug probe session and release resources.

@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from dbgprobe_mcp_server.backend import Backend, ConnectConfig, ProbeInfo
+from dbgprobe_mcp_server.backend import Backend, ConnectConfig, DeviceSecuredError, ProbeInfo
 
 logger = logging.getLogger("dbgprobe_mcp_server")
 
@@ -178,10 +178,34 @@ def _parse_probe_list(stdout: str) -> list[ProbeInfo]:
     return probes
 
 
+_SECURED_KEYWORDS = [
+    "device is secured",
+    "approtect",
+    "read protected",
+    "protection enabled",
+    "secure element",
+    "unlock the device",
+]
+
+
+def _is_device_secured(stdout: str, stderr: str) -> bool:
+    """Return True if JLinkExe output indicates the target is secured/read-protected."""
+    lower = (stdout + "\n" + stderr).lower()
+    return any(kw in lower for kw in _SECURED_KEYWORDS)
+
+
 def _check_error(stdout: str, stderr: str) -> str | None:
     """Return an error message if JLinkExe output indicates failure."""
     combined = stdout + "\n" + stderr
     lower = combined.lower()
+    if _is_device_secured(stdout, stderr):
+        return "Target device is secured. Use dbgprobe.erase to mass-erase and unlock."
+    if "inittarget()" in lower and "error" in lower:
+        return (
+            "InitTarget() failed. The device string may be wrong — "
+            "note that the probe name (e.g. OB-nRF5340) refers to the debugger MCU, "
+            "not the target chip. Check the actual target device on the board."
+        )
     if "cannot connect" in lower or "could not connect" in lower:
         return "Cannot connect to target. Check wiring, power, and device name."
     if "no j-link found" in lower or "no emulators found" in lower:
@@ -213,6 +237,9 @@ async def _run_jlink_script(
     serial: str | None = None,
     timeout: float = 30.0,
     extra_args: list[str] | None = None,
+    auto_connect: bool = True,
+    exit_on_error: bool = True,
+    no_gui: bool = True,
 ) -> tuple[str, str, int]:
     """Run JLinkExe with a temporary command script.
 
@@ -230,8 +257,12 @@ async def _run_jlink_script(
         args += ["-Speed", str(speed_khz)]
         if serial:
             args += ["-SelectEmuBySN", serial]
-        args += ["-AutoConnect", "1"]
-        args += ["-ExitOnError", "1"]
+        if auto_connect:
+            args += ["-AutoConnect", "1"]
+        if exit_on_error:
+            args += ["-ExitOnError", "1"]
+        if no_gui:
+            args += ["-NoGui", "1"]
         args += ["-CommandFile", script_path]
         if extra_args:
             args += extra_args
@@ -243,7 +274,11 @@ async def _run_jlink_script(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            await _kill_process(proc)
+            raise TimeoutError(f"JLinkExe timed out after {timeout}s")
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
 
@@ -259,20 +294,36 @@ async def _run_jlink_script(
             pass
 
 
-async def _run_jlink_list_probes(exe: str) -> tuple[str, str, int]:
+async def _kill_process(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess and wait for it to exit."""
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except asyncio.TimeoutError:
+        pass
+
+
+async def _run_jlink_list_probes(exe: str, timeout: float = 15.0) -> tuple[str, str, int]:
     """Run JLinkExe ShowEmuList — no device/interface needed."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".jlink", delete=False, prefix="dbgprobe_") as f:
         f.write("ShowEmuList\nq\n")
         script_path = f.name
 
     try:
-        args = [exe, "-CommandFile", script_path]
+        args = [exe, "-NoGui", "1", "-CommandFile", script_path]
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            await _kill_process(proc)
+            raise TimeoutError(f"JLinkExe timed out after {timeout}s")
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
         return stdout, stderr, proc.returncode or 0
@@ -335,7 +386,7 @@ class JLinkBackend(Backend):
             )
         self._config = config
 
-        # Validate connectivity with a simple script
+        # Validate connectivity with a simple script.
         commands = ["h", "q"]
         stdout, stderr, _rc = await _run_jlink_script(
             self._exe,
@@ -346,10 +397,16 @@ class JLinkBackend(Backend):
             serial=config.probe_serial,
         )
 
+        if _is_device_secured(stdout, stderr):
+            self._config = None
+            raise DeviceSecuredError(
+                f"Target device is secured. Use dbgprobe.erase to mass-erase and unlock."
+                f"\n\n[JLink output]\n{stdout.strip()}"
+            )
         err_msg = _check_error(stdout, stderr)
         if err_msg:
             self._config = None
-            raise ConnectionError(err_msg)
+            raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
 
         return {"resolved_paths": paths}
 
@@ -477,6 +534,46 @@ class JLinkBackend(Backend):
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+    async def erase(
+        self,
+        config: ConnectConfig,
+        start_addr: int | None = None,
+        end_addr: int | None = None,
+    ) -> dict[str, Any]:
+        paths = self._resolve_paths()
+        if self._exe is None:
+            raise FileNotFoundError(
+                "JLinkExe not found. Install SEGGER J-Link Software or set DBGPROBE_JLINK_PATH."
+            )
+
+        if start_addr is not None and end_addr is not None:
+            commands = [f"erase {start_addr:#x} {end_addr:#x}", "r", "q"]
+        else:
+            commands = ["erase", "r", "q"]
+
+        stdout, stderr, _rc = await _run_jlink_script(
+            self._exe,
+            commands,
+            device=config.device,
+            interface=config.interface,
+            speed_khz=config.speed_khz,
+            serial=config.probe_serial,
+        )
+
+        # Verify erase actually succeeded by looking for positive confirmation.
+        combined = stdout + "\n" + stderr
+        lower = combined.lower()
+        if "erasing done" not in lower and "erase: completed" not in lower:
+            # Erase didn't confirm success — check for specific errors.
+            err_msg = _check_error(stdout, stderr)
+            if err_msg:
+                raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
+            raise ConnectionError(
+                f"Erase did not complete successfully.\n\n[JLink output]\n{stdout.strip()}"
+            )
+
+        return {"resolved_paths": paths}
 
     # -- private helpers --
 

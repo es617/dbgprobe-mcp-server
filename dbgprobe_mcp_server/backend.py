@@ -10,6 +10,10 @@ from typing import Any
 logger = logging.getLogger("dbgprobe_mcp_server")
 
 
+class DeviceSecuredError(ConnectionError):
+    """Raised when the target device is secured/read-protected (e.g. APPROTECT)."""
+
+
 @dataclass
 class ProbeInfo:
     """Information about a discovered debug probe."""
@@ -98,6 +102,19 @@ class Backend(ABC):
     @abstractmethod
     async def mem_write(self, address: int, data: bytes) -> dict[str, Any]:
         """Write *data* starting at *address*."""
+
+    @abstractmethod
+    async def erase(
+        self,
+        config: ConnectConfig,
+        start_addr: int | None = None,
+        end_addr: int | None = None,
+    ) -> dict[str, Any]:
+        """Erase the target flash.
+
+        With no addresses: full chip erase (unlocks secured devices).
+        With *start_addr* and *end_addr*: erase only that address range.
+        """
 
 
 class BackendRegistry:
