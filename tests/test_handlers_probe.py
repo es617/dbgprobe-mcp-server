@@ -69,6 +69,9 @@ class MockBackend(Backend):
     async def erase(self, config, start_addr=None, end_addr=None):
         return {"resolved_paths": {"mock_exe": "/mock/path"}}
 
+    async def erase_via_gdb(self, start_addr=None, end_addr=None):
+        return {"monitor_output": "Erase done"}
+
     async def step(self):
         return {"pc": 0x0800_0100, "reason": "step", "signal": 5}
 
@@ -213,7 +216,9 @@ class TestConnect:
 
 
 class TestErase:
-    async def test_success(self):
+    # -- Session-less erase (JLinkExe) --
+
+    async def test_sessionless_success(self):
         state = ProbeState()
         with _patch_registry(), _patch_defaults():
             result = await handle_erase(state, {"backend": "mock"})
@@ -222,7 +227,7 @@ class TestErase:
         assert result["config"]["backend"] == "mock"
         assert "start_addr" not in result
 
-    async def test_range_erase(self):
+    async def test_sessionless_range_erase(self):
         state = ProbeState()
         with _patch_registry(), _patch_defaults():
             result = await handle_erase(
@@ -262,6 +267,31 @@ class TestErase:
             result = await handle_erase(state, {"backend": "nope"})
         assert result["ok"] is False
         assert result["error"]["code"] == "invalid_backend"
+
+    # -- Session-based erase (GDB monitor) --
+
+    async def test_session_erase_success(self):
+        state = ProbeState()
+        sid, _session = _make_session(state)
+        result = await handle_erase(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert result["erased"] is True
+        assert result["session_id"] == sid
+        assert "config" not in result  # session-based doesn't include config
+
+    async def test_session_erase_range(self):
+        state = ProbeState()
+        sid, _session = _make_session(state)
+        result = await handle_erase(state, {"session_id": sid, "start_addr": 0x40000, "end_addr": 0x80000})
+        assert result["ok"] is True
+        assert result["erased"] is True
+        assert result["start_addr"] == 0x40000
+        assert result["end_addr"] == 0x80000
+
+    async def test_session_erase_unknown_session(self):
+        state = ProbeState()
+        with pytest.raises(KeyError, match="Unknown connection_id"):
+            await handle_erase(state, {"session_id": "nope"})
 
 
 class TestDisconnect:
@@ -396,6 +426,29 @@ class TestFlash:
         result = await handle_flash(state, {"session_id": sid, "path": str(fw)})
         assert result["ok"] is True
         assert result["verified"] is True
+        assert result["session_id"] == sid
+
+    async def test_sessionless_success(self, tmp_path):
+        state = ProbeState()
+        fw = tmp_path / "test.hex"
+        fw.write_text(":00000001FF\n")
+
+        with _patch_registry(), _patch_defaults():
+            result = await handle_flash(state, {"backend": "mock", "path": str(fw)})
+        assert result["ok"] is True
+        assert result["verified"] is True
+        assert result["config"]["backend"] == "mock"
+        assert "session_id" not in result
+
+    async def test_sessionless_unknown_backend(self, tmp_path):
+        state = ProbeState()
+        fw = tmp_path / "test.hex"
+        fw.write_text(":00000001FF\n")
+
+        with _patch_registry():
+            result = await handle_flash(state, {"backend": "nope", "path": str(fw)})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_backend"
 
 
 class TestMemRead:
@@ -638,6 +691,195 @@ class TestFlashClearsBreakpoints:
         assert session.breakpoints == {}
 
 
+class TestPcEnrichment:
+    """Test that halt/step/status add symbol info when ELF is attached."""
+
+    def _attach_mock_elf(self, session):
+        from dbgprobe_mcp_server.elf import ElfData, SymbolInfo
+
+        main = SymbolInfo(name="main", address=0x0800_0200, size=64, sym_type="FUNC")
+        step_func = SymbolInfo(name="step_target", address=0x0800_0100, size=32, sym_type="FUNC")
+        funcs = sorted([main, step_func], key=lambda s: s.address)
+        session.elf = ElfData(
+            path="/mock/fw.elf",
+            entry_point=0x0800_0000,
+            symbols={"main": [main], "step_target": [step_func]},
+            _sorted_functions=funcs,
+            _func_addrs=[s.address for s in funcs],
+        )
+
+    async def test_status_enriched(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        self._attach_mock_elf(session)
+        # MockBackend.status() returns pc=0x0800_0200 which is main+0
+        result = await handle_status(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert result["symbol"] == "main"
+        assert result["symbol_offset"] == 0
+
+    async def test_step_enriched(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        self._attach_mock_elf(session)
+        # MockBackend.step() returns pc=0x0800_0100 which is step_target+0
+        result = await handle_step(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert result["symbol"] == "step_target"
+        assert result["symbol_offset"] == 0
+
+    async def test_halt_enriched(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        self._attach_mock_elf(session)
+        # MockBackend.halt() returns {} — no pc, so no enrichment
+        result = await handle_halt(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert "symbol" not in result
+
+    async def test_status_no_elf(self):
+        """Without ELF, no symbol fields appear."""
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_status(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert "symbol" not in result
+
+
+class TestBreakpointSetSymbol:
+    """Test breakpoint.set with symbol parameter."""
+
+    def _attach_mock_elf(self, session):
+        from dbgprobe_mcp_server.elf import ElfData, SymbolInfo
+
+        main = SymbolInfo(name="main", address=0x0800_0200, size=64, sym_type="FUNC")
+        session.elf = ElfData(
+            path="/mock/fw.elf",
+            entry_point=0x0800_0000,
+            symbols={"main": [main]},
+            _sorted_functions=[main],
+            _func_addrs=[main.address],
+        )
+
+    async def test_symbol_resolved(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        self._attach_mock_elf(session)
+        result = await handle_breakpoint_set(state, {"session_id": sid, "symbol": "main"})
+        assert result["ok"] is True
+        assert result["address"] == 0x0800_0200
+        assert result["symbol"] == "main"
+        assert 0x0800_0200 in session.breakpoints
+
+    async def test_symbol_not_found(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        self._attach_mock_elf(session)
+        result = await handle_breakpoint_set(state, {"session_id": sid, "symbol": "nonexistent"})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "not_found"
+
+    async def test_symbol_no_elf(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_breakpoint_set(state, {"session_id": sid, "symbol": "main"})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "no_elf"
+
+    async def test_both_symbol_and_address_error(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        self._attach_mock_elf(session)
+        result = await handle_breakpoint_set(
+            state, {"session_id": sid, "symbol": "main", "address": 0x0800_0200}
+        )
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_params"
+
+    async def test_neither_symbol_nor_address_error(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_breakpoint_set(state, {"session_id": sid})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_params"
+
+
+class TestFlashElfHandling:
+    """Test flash ELF auto-reload and sibling hint."""
+
+    async def test_flash_elf_hint(self, tmp_path):
+        """Flash finds sibling .elf file and includes hint."""
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        fw = tmp_path / "firmware.hex"
+        fw.write_text(":00000001FF\n")
+        elf = tmp_path / "firmware.elf"
+        elf.write_bytes(b"\x7fELF")  # just needs to exist for find_sibling_elf
+
+        result = await handle_flash(state, {"session_id": sid, "path": str(fw)})
+        assert result["ok"] is True
+        assert "elf_hint" in result
+        assert result["elf_hint"].endswith(".elf")
+
+    async def test_flash_no_elf_hint_when_no_sibling(self, tmp_path):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        fw = tmp_path / "firmware.hex"
+        fw.write_text(":00000001FF\n")
+
+        result = await handle_flash(state, {"session_id": sid, "path": str(fw)})
+        assert result["ok"] is True
+        assert "elf_hint" not in result
+
+    async def test_flash_elf_auto_reload(self, tmp_path):
+        """If ELF is attached, flash re-parses from same path."""
+        from pathlib import Path as P
+
+        from dbgprobe_mcp_server.elf import parse_elf
+
+        state = ProbeState()
+        sid, session = _make_session(state)
+
+        # Use the real minimal.elf fixture
+        elf_path = str(P(__file__).parent / "fixtures" / "minimal.elf")
+        session.elf = parse_elf(elf_path)
+
+        fw = tmp_path / "firmware.hex"
+        fw.write_text(":00000001FF\n")
+
+        result = await handle_flash(state, {"session_id": sid, "path": str(fw)})
+        assert result["ok"] is True
+        assert result["elf_reloaded"] is True
+        assert result["elf_path"] == elf_path
+        # ELF should still be attached
+        assert session.elf is not None
+
+    async def test_flash_elf_detach_on_missing(self, tmp_path):
+        """If ELF file is gone after flash, detach it."""
+        from dbgprobe_mcp_server.elf import ElfData, SymbolInfo
+
+        state = ProbeState()
+        sid, session = _make_session(state)
+
+        # Attach an ELF pointing to a path that doesn't exist
+        main = SymbolInfo(name="main", address=0x0800_0000, size=10, sym_type="FUNC")
+        session.elf = ElfData(
+            path="/nonexistent/deleted.elf",
+            entry_point=0x0800_0000,
+            symbols={"main": [main]},
+            _sorted_functions=[main],
+            _func_addrs=[main.address],
+        )
+
+        fw = tmp_path / "firmware.hex"
+        fw.write_text(":00000001FF\n")
+
+        result = await handle_flash(state, {"session_id": sid, "path": str(fw)})
+        assert result["ok"] is True
+        assert result["elf_detached"] is True
+        assert session.elf is None
+
+
 class TestHandlersIntrospection:
     async def test_list_sessions(self):
         from dbgprobe_mcp_server.handlers_introspection import handle_connections_list
@@ -649,3 +891,25 @@ class TestHandlersIntrospection:
         assert result["count"] == 1
         assert result["sessions"][0]["session_id"] == sid
         assert result["sessions"][0]["backend"] == "mock"
+        assert "elf" not in result["sessions"][0]
+
+    async def test_list_sessions_with_elf(self):
+        from dbgprobe_mcp_server.elf import ElfData, SymbolInfo
+        from dbgprobe_mcp_server.handlers_introspection import handle_connections_list
+
+        state = ProbeState()
+        sid, session = _make_session(state)
+        main = SymbolInfo(name="main", address=0x0800_0000, size=10, sym_type="FUNC")
+        session.elf = ElfData(
+            path="/mock/fw.elf",
+            entry_point=0x0800_0000,
+            symbols={"main": [main]},
+            _sorted_functions=[main],
+            _func_addrs=[main.address],
+        )
+        result = await handle_connections_list(state, {})
+        assert result["ok"] is True
+        elf_info = result["sessions"][0]["elf"]
+        assert elf_info["path"] == "/mock/fw.elf"
+        assert elf_info["symbol_count"] == 1
+        assert elf_info["function_count"] == 1

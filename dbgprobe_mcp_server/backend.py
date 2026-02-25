@@ -110,7 +110,7 @@ class Backend(ABC):
         start_addr: int | None = None,
         end_addr: int | None = None,
     ) -> dict[str, Any]:
-        """Erase the target flash.
+        """Erase the target flash via JLinkExe (session-less).
 
         With no addresses: full chip erase (unlocks secured devices).
         With *start_addr* and *end_addr*: erase only that address range.
@@ -143,6 +143,14 @@ class Backend(ABC):
     async def list_breakpoints(self) -> list[dict[str, Any]]:
         """List active breakpoints."""
         raise NotImplementedError("list_breakpoints() not supported by this backend")
+
+    async def erase_via_gdb(
+        self,
+        start_addr: int | None = None,
+        end_addr: int | None = None,
+    ) -> dict[str, Any]:
+        """Erase flash through an active GDB session (no USB contention)."""
+        raise NotImplementedError("erase_via_gdb() not supported by this backend")
 
 
 class BackendRegistry:

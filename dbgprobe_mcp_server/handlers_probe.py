@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import base64
+import logging
 import struct
 from typing import Any
 
 from mcp.types import Tool
 
 from dbgprobe_mcp_server.backend import ConnectConfig, DeviceSecuredError, registry
+from dbgprobe_mcp_server.elf import find_sibling_elf, parse_elf, resolve_address, resolve_symbol
 from dbgprobe_mcp_server.helpers import (
     DBGPROBE_BACKEND,
     DBGPROBE_INTERFACE,
@@ -16,8 +18,11 @@ from dbgprobe_mcp_server.helpers import (
     DBGPROBE_SPEED_KHZ,
     _err,
     _ok,
+    _parse_addr,
 )
 from dbgprobe_mcp_server.state import Breakpoint, DbgProbeSession, ProbeState
+
+logger = logging.getLogger("dbgprobe_mcp_server")
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -47,7 +52,10 @@ TOOLS: list[Tool] = [
             "Establish a debug probe session. Returns a session_id and the "
             "resolved configuration (backend, executable paths, defaults applied). "
             "The target is halted after connecting — this is inherent to the debug "
-            "probe connection. Use dbgprobe.go to resume execution if needed."
+            "probe connection. Use dbgprobe.go to resume execution if needed. "
+            "For symbol-aware debugging, attach an ELF file with dbgprobe.elf.attach "
+            "after connecting — this enables breakpoints by function name and "
+            "address-to-symbol resolution in status/step/halt responses."
         ),
         inputSchema={
             "type": "object",
@@ -87,40 +95,46 @@ TOOLS: list[Tool] = [
         description=(
             "Erase target flash. With no address params: full chip erase (unlocks "
             "secured/read-protected devices like Nordic APPROTECT). With start_addr "
-            "and end_addr: erase only that range. Does not require a session. "
-            "Use when dbgprobe.connect returns device_secured."
+            "and end_addr: erase only that range. If session_id is provided, erases "
+            "through the active GDB session (preferred — no USB contention). "
+            "Without session_id, uses JLinkExe directly (for session-less erase, "
+            "e.g. unlocking a secured device before connect)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID for session-based erase (preferred). Omit for session-less erase.",
+                },
                 "backend": {
                     "type": "string",
-                    "description": "Backend to use (default from DBGPROBE_BACKEND env var).",
+                    "description": "Backend to use (default from DBGPROBE_BACKEND env var). Only for session-less erase.",
                 },
                 "probe_id": {
                     "type": "string",
-                    "description": "Serial number of the probe to use.",
+                    "description": "Serial number of the probe. Only for session-less erase.",
                 },
                 "device": {
                     "type": "string",
-                    "description": "Target device string (e.g. nRF52840_xxAA).",
+                    "description": "Target device string (e.g. nRF52840_xxAA). Only for session-less erase.",
                 },
                 "interface": {
                     "type": "string",
                     "enum": ["swd", "jtag"],
-                    "description": "Debug interface (default from DBGPROBE_INTERFACE).",
+                    "description": "Debug interface (default from DBGPROBE_INTERFACE). Only for session-less erase.",
                 },
                 "speed_khz": {
                     "type": "integer",
-                    "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ).",
+                    "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ). Only for session-less erase.",
                 },
                 "start_addr": {
-                    "type": "integer",
-                    "description": "Start address for range erase (e.g. 0x00040000). Omit for full chip erase.",
+                    "type": ["integer", "string"],
+                    "description": 'Start address for range erase (e.g. 0x00040000 or "0x40000"). Omit for full chip erase.',
                 },
                 "end_addr": {
-                    "type": "integer",
-                    "description": "End address for range erase (e.g. 0x00080000). Required if start_addr is set.",
+                    "type": ["integer", "string"],
+                    "description": 'End address for range erase (e.g. 0x00080000 or "0x80000"). Required if start_addr is set.',
                 },
             },
             "required": [],
@@ -182,19 +196,45 @@ TOOLS: list[Tool] = [
         name="dbgprobe.flash",
         description=(
             "Program a firmware image to the target. Supports .hex, .elf (address auto-detected) "
-            "and raw .bin (requires explicit addr). Optionally verify and reset after flashing."
+            "and raw .bin (requires explicit addr). Optionally verify and reset after flashing. "
+            "If session_id is provided, tears down GDB, flashes, and restarts (preferred). "
+            "Without session_id, uses JLinkExe directly (session-less, no debug session needed)."
         ),
         inputSchema={
             "type": "object",
             "properties": {
-                "session_id": {"type": "string"},
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID for session-based flash (preferred). Omit for session-less flash.",
+                },
                 "path": {
                     "type": "string",
                     "description": "Path to firmware file (.hex, .elf, .bin).",
                 },
-                "addr": {
+                "backend": {
+                    "type": "string",
+                    "description": "Backend to use (default from DBGPROBE_BACKEND env var). Only for session-less flash.",
+                },
+                "probe_id": {
+                    "type": "string",
+                    "description": "Serial number of the probe. Only for session-less flash.",
+                },
+                "device": {
+                    "type": "string",
+                    "description": "Target device string (e.g. nRF52840_xxAA). Only for session-less flash.",
+                },
+                "interface": {
+                    "type": "string",
+                    "enum": ["swd", "jtag"],
+                    "description": "Debug interface (default from DBGPROBE_INTERFACE). Only for session-less flash.",
+                },
+                "speed_khz": {
                     "type": "integer",
-                    "description": "Base address for .bin files (e.g. 0x08000000). Not needed for .hex/.elf.",
+                    "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ). Only for session-less flash.",
+                },
+                "addr": {
+                    "type": ["integer", "string"],
+                    "description": 'Base address for .bin files (e.g. 0x08000000 or "0x8000000"). Not needed for .hex/.elf.',
                 },
                 "verify": {
                     "type": "boolean",
@@ -205,7 +245,7 @@ TOOLS: list[Tool] = [
                     "description": "Reset and run after programming (default: true).",
                 },
             },
-            "required": ["session_id", "path"],
+            "required": ["path"],
         },
     ),
     Tool(
@@ -219,8 +259,8 @@ TOOLS: list[Tool] = [
             "properties": {
                 "session_id": {"type": "string"},
                 "address": {
-                    "type": "integer",
-                    "description": "Start address (e.g. 0x20000000).",
+                    "type": ["integer", "string"],
+                    "description": 'Start address (e.g. 0x20000000 or "0x20000000").',
                 },
                 "length": {
                     "type": "integer",
@@ -246,8 +286,8 @@ TOOLS: list[Tool] = [
             "properties": {
                 "session_id": {"type": "string"},
                 "address": {
-                    "type": "integer",
-                    "description": "Start address.",
+                    "type": ["integer", "string"],
+                    "description": 'Start address (e.g. 0x20000000 or "0x20000000").',
                 },
                 "data": {
                     "type": "string",
@@ -297,17 +337,22 @@ TOOLS: list[Tool] = [
     Tool(
         name="dbgprobe.breakpoint.set",
         description=(
-            "Set a breakpoint at a target address. Software breakpoints (default) "
+            "Set a breakpoint at a target address or symbol name. Software breakpoints (default) "
             "are handled by the debug probe and work on both flash and RAM. "
-            "Hardware breakpoints use the CPU's FPB and are limited in number (typically 4-6)."
+            "Hardware breakpoints use the CPU's FPB and are limited in number (typically 4-6). "
+            "If 'symbol' is provided and an ELF is attached, resolves the symbol to an address."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "session_id": {"type": "string"},
                 "address": {
-                    "type": "integer",
-                    "description": "Address to set the breakpoint at (e.g. 0x08000100).",
+                    "type": ["integer", "string"],
+                    "description": 'Address to set the breakpoint at (e.g. 0x08000100 or "0x8000100").',
+                },
+                "symbol": {
+                    "type": "string",
+                    "description": "Symbol name to resolve to an address (requires ELF attached).",
                 },
                 "bp_type": {
                     "type": "string",
@@ -315,7 +360,7 @@ TOOLS: list[Tool] = [
                     "description": "Breakpoint type: 'sw' (software, default) or 'hw' (hardware).",
                 },
             },
-            "required": ["session_id", "address"],
+            "required": ["session_id"],
         },
     ),
     Tool(
@@ -326,8 +371,8 @@ TOOLS: list[Tool] = [
             "properties": {
                 "session_id": {"type": "string"},
                 "address": {
-                    "type": "integer",
-                    "description": "Address of the breakpoint to clear.",
+                    "type": ["integer", "string"],
+                    "description": 'Address of the breakpoint to clear (e.g. 0x08000100 or "0x8000100").',
                 },
             },
             "required": ["session_id", "address"],
@@ -345,6 +390,24 @@ TOOLS: list[Tool] = [
         },
     ),
 ]
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _enrich_pc(result: dict[str, Any], session: DbgProbeSession) -> None:
+    """If ELF is attached and result has a 'pc' key, add symbol + offset."""
+    if session.elf is None:
+        return
+    pc = result.get("pc")
+    if pc is None:
+        return
+    resolved = resolve_address(session.elf, pc)
+    if resolved is not None:
+        result["symbol"] = resolved[0]
+        result["symbol_offset"] = resolved[1]
+
 
 # ---------------------------------------------------------------------------
 # Handlers
@@ -415,6 +478,33 @@ async def handle_connect(state: ProbeState, args: dict[str, Any]) -> dict[str, A
 
 
 async def handle_erase(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
+    start_addr = _parse_addr(args.get("start_addr"))
+    end_addr = _parse_addr(args.get("end_addr"))
+
+    if (start_addr is None) != (end_addr is None):
+        return _err("invalid_params", "Both start_addr and end_addr are required for range erase.")
+    if start_addr is not None and end_addr is not None and start_addr >= end_addr:
+        return _err("invalid_params", "start_addr must be less than end_addr.")
+
+    session_id = args.get("session_id")
+
+    # Session-based erase: route through GDB (no USB contention)
+    if session_id is not None:
+        session = state.get_session(session_id)
+        try:
+            erase_info = await session.backend.erase_via_gdb(start_addr=start_addr, end_addr=end_addr)
+        except NotImplementedError:
+            return _err("not_supported", "This backend does not support session-based erase.")
+        except ConnectionError as exc:
+            return _err("erase_failed", str(exc))
+
+        result_kwargs: dict[str, Any] = {"erased": True, "session_id": session_id}
+        if start_addr is not None:
+            result_kwargs["start_addr"] = start_addr
+            result_kwargs["end_addr"] = end_addr
+        return _ok(**result_kwargs, **erase_info)
+
+    # Session-less erase: JLinkExe direct (for unlocking secured devices, etc.)
     backend_name = args.get("backend", DBGPROBE_BACKEND)
     try:
         backend = registry.create(backend_name)
@@ -429,14 +519,6 @@ async def handle_erase(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
         probe_serial=args.get("probe_id"),
     )
 
-    start_addr = args.get("start_addr")
-    end_addr = args.get("end_addr")
-
-    if (start_addr is None) != (end_addr is None):
-        return _err("invalid_params", "Both start_addr and end_addr are required for range erase.")
-    if start_addr is not None and end_addr is not None and start_addr >= end_addr:
-        return _err("invalid_params", "start_addr must be less than end_addr.")
-
     try:
         erase_info = await backend.erase(config, start_addr=start_addr, end_addr=end_addr)
     except FileNotFoundError as exc:
@@ -444,7 +526,7 @@ async def handle_erase(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
     except ConnectionError as exc:
         return _err("erase_failed", str(exc))
 
-    result_kwargs: dict[str, Any] = {"erased": True, "config": config.to_dict()}
+    result_kwargs = {"erased": True, "config": config.to_dict()}
     if start_addr is not None:
         result_kwargs["start_addr"] = start_addr
         result_kwargs["end_addr"] = end_addr
@@ -496,6 +578,7 @@ async def handle_reset(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
 async def handle_halt(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
     result = await session.backend.halt()
+    _enrich_pc(result, session)
     return _ok(session_id=args["session_id"], **result)
 
 
@@ -528,24 +611,87 @@ async def handle_go(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
-    session = state.get_session(args["session_id"])
     path = args["path"]
-    addr = args.get("addr")
+    addr = _parse_addr(args.get("addr"))
     verify = args.get("verify", True)
     reset_after = args.get("reset_after", True)
+    session_id = args.get("session_id")
 
-    result = await session.backend.flash(path, addr=addr, verify=verify, reset_after=reset_after)
+    # Session-based flash: teardown GDB → JLinkExe → restart GDB
+    if session_id is not None:
+        session = state.get_session(session_id)
+        try:
+            result = await session.backend.flash(path, addr=addr, verify=verify, reset_after=reset_after)
+        except FileNotFoundError as exc:
+            return _err("file_not_found", str(exc))
+        except (ValueError, ConnectionError) as exc:
+            return _err("flash_failed", str(exc))
 
-    # Flashing new firmware invalidates all breakpoints.
-    if session.breakpoints:
-        session.breakpoints.clear()
+        # Flashing new firmware invalidates all breakpoints.
+        if session.breakpoints:
+            session.breakpoints.clear()
 
-    return _ok(session_id=args["session_id"], **result)
+        # ELF auto-reload: if an ELF is attached, re-parse from same path.
+        if session.elf is not None:
+            elf_path = session.elf.path
+            try:
+                session.elf = parse_elf(elf_path)
+                result["elf_reloaded"] = True
+                result["elf_path"] = elf_path
+            except Exception:
+                logger.debug("ELF auto-reload failed for %s, detaching", elf_path)
+                session.elf = None
+                result["elf_detached"] = True
+
+        # Look for sibling .elf near the flashed file.
+        hint = find_sibling_elf(path)
+        if hint is not None:
+            result["elf_hint"] = hint
+
+        return _ok(session_id=session_id, **result)
+
+    # Session-less flash: JLinkExe direct (no GDB involved)
+    backend_name = args.get("backend", DBGPROBE_BACKEND)
+    try:
+        backend = registry.create(backend_name)
+    except ValueError as exc:
+        return _err("invalid_backend", str(exc))
+
+    config = ConnectConfig(
+        backend=backend_name,
+        device=args.get("device") or DBGPROBE_JLINK_DEVICE,
+        interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
+        speed_khz=args.get("speed_khz") or DBGPROBE_SPEED_KHZ,
+        probe_serial=args.get("probe_id"),
+    )
+    # Set config so backend.flash() can use it for JLinkExe args
+    backend._config = config
+
+    try:
+        result = await backend.flash(path, addr=addr, verify=verify, reset_after=reset_after)
+    except FileNotFoundError as exc:
+        return _err("file_not_found", str(exc))
+    except TimeoutError:
+        return _err(
+            "timeout",
+            "JLinkExe timed out. For session-less flash, ensure device and probe_id are provided.",
+        )
+    except (ValueError, ConnectionError) as exc:
+        return _err("flash_failed", str(exc))
+
+    result["config"] = config.to_dict()
+
+    # Look for sibling .elf near the flashed file.
+    hint = find_sibling_elf(path)
+    if hint is not None:
+        result["elf_hint"] = hint
+
+    return _ok(**result)
 
 
 async def handle_mem_read(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
-    address = args["address"]
+    address = _parse_addr(args["address"])
     length = args["length"]
     fmt = args.get("format", "hex")
 
@@ -582,7 +728,7 @@ async def handle_mem_read(state: ProbeState, args: dict[str, Any]) -> dict[str, 
 
 async def handle_mem_write(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
-    address = args["address"]
+    address = _parse_addr(args["address"])
     fmt = args.get("format", "hex")
 
     if fmt == "u32":
@@ -613,6 +759,7 @@ async def handle_step(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]
         result = await session.backend.step()
     except NotImplementedError:
         return _err("not_supported", "step() is not supported by this backend.")
+    _enrich_pc(result, session)
     return _ok(session_id=args["session_id"], **result)
 
 
@@ -622,16 +769,31 @@ async def handle_status(state: ProbeState, args: dict[str, Any]) -> dict[str, An
         result = await session.backend.status()
     except NotImplementedError:
         return _err("not_supported", "status() is not supported by this backend.")
+    _enrich_pc(result, session)
     return _ok(session_id=args["session_id"], **result)
 
 
 async def handle_breakpoint_set(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
-    address = args["address"]
     bp_type = args.get("bp_type", "sw")
+    symbol_name = args.get("symbol")
+    address = _parse_addr(args.get("address"))
 
     if bp_type not in ("hw", "sw"):
         return _err("invalid_params", f"Invalid breakpoint type: {bp_type!r}. Use 'hw' or 'sw'.")
+
+    # Resolve symbol to address if provided
+    if symbol_name is not None:
+        if address is not None:
+            return _err("invalid_params", "Provide 'address' or 'symbol', not both.")
+        if session.elf is None:
+            return _err("no_elf", "No ELF attached. Use dbgprobe.elf.attach to resolve symbols.")
+        sym = resolve_symbol(session.elf, symbol_name)
+        if sym is None:
+            return _err("not_found", f"Symbol {symbol_name!r} not found in ELF.")
+        address = sym.address
+    elif address is None:
+        return _err("invalid_params", "Provide 'address' or 'symbol'.")
 
     try:
         result = await session.backend.set_breakpoint(address, bp_type=bp_type)
@@ -639,12 +801,14 @@ async def handle_breakpoint_set(state: ProbeState, args: dict[str, Any]) -> dict
         return _err("not_supported", "Breakpoints are not supported by this backend.")
 
     session.breakpoints[address] = Breakpoint(address=address, bp_type=bp_type)
+    if symbol_name is not None:
+        result["symbol"] = symbol_name
     return _ok(session_id=args["session_id"], **result)
 
 
 async def handle_breakpoint_clear(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
-    address = args["address"]
+    address = _parse_addr(args["address"])
 
     if address not in session.breakpoints:
         return _err("not_found", f"No breakpoint at 0x{address:08x}.")

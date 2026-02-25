@@ -35,3 +35,17 @@ def _err(code: str, message: str) -> dict[str, Any]:
 
 def _result_text(payload: dict[str, Any]) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, default=str))]
+
+
+def _parse_addr(value: int | str | None) -> int | None:
+    """Parse an address that may be an integer or a hex string like '0x10001208'."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 0)  # auto-detects 0x prefix, decimal, etc.
+        except ValueError:
+            raise ValueError(f"Invalid address: {value!r}") from None
+    raise ValueError(f"Invalid address type: {type(value).__name__}")

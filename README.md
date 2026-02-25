@@ -93,6 +93,7 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 | **Probe** | `dbgprobe.list_probes`, `dbgprobe.connect`, `dbgprobe.erase`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.step`, `dbgprobe.status`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write`, `dbgprobe.breakpoint.set`, `dbgprobe.breakpoint.clear`, `dbgprobe.breakpoint.list` |
 | **Introspection** | `dbgprobe.connections.list` |
 | **Protocol Specs** | `dbgprobe.spec.template`, `dbgprobe.spec.register`, `dbgprobe.spec.list`, `dbgprobe.spec.attach`, `dbgprobe.spec.get`, `dbgprobe.spec.read`, `dbgprobe.spec.search` |
+| **ELF** | `dbgprobe.elf.attach`, `dbgprobe.elf.info`, `dbgprobe.elf.lookup`, `dbgprobe.elf.symbols` |
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
 | **Plugins** | `dbgprobe.plugin.template`, `dbgprobe.plugin.list`, `dbgprobe.plugin.reload`, `dbgprobe.plugin.load` |
 
@@ -163,6 +164,23 @@ claude mcp add dbgprobe -e DBGPROBE_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 Specs are markdown files that describe a target device's debug protocol — register maps, memory layout, boot sequences, and multi-step flows. They live in `.dbgprobe_mcp/specs/` and teach the agent what the hardware can do.
 
 Without a spec, the agent can still connect and interact with the probe. With a spec, it knows what memory regions matter, what register values mean, and how to perform device-specific operations.
+
+---
+
+## ELF Support
+
+Attach an ELF file to a session to enable symbol-aware debugging:
+
+- **Symbol lookup** — resolve function names to addresses and vice versa
+- **Breakpoints by name** — `breakpoint.set(symbol="main")` instead of raw addresses
+- **Auto-enriched responses** — `status`, `step`, and `halt` include `symbol` + `symbol_offset` when an ELF is attached
+- **Flash integration** — after flashing, the ELF is auto-reloaded and sibling `.elf` files are suggested
+
+```
+> "Attach the ELF, set a breakpoint on main, run, and show me where it halted."
+```
+
+The agent calls `elf.attach`, `breakpoint.set(symbol="main")`, `go`, then `status` — and gets back `"halted at main+0"` instead of a raw hex address.
 
 ---
 

@@ -484,6 +484,167 @@ Full-text search over a spec's content. Returns matching snippets with line numb
 
 ---
 
+## ELF
+
+Tools for attaching ELF files to sessions, enabling symbol-based breakpoints and address-to-symbol resolution.
+
+### dbgprobe.elf.attach
+
+Parse an ELF file and attach it to a session. Enables symbol-based breakpoints (by function name), address-to-symbol resolution in status/step/halt responses, and symbol search. Re-attaching replaces the previous ELF.
+
+```json
+{ "session_id": "p1a2b3c4", "path": "/path/to/build/zephyr/zephyr.elf" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "path": "/path/to/build/zephyr/zephyr.elf",
+  "entry_point": 134217728,
+  "symbol_count": 1234,
+  "function_count": 567,
+  "sections": [
+    { "name": ".text", "address": 134217984, "size": 65536, "type": "SHT_PROGBITS" }
+  ]
+}
+```
+
+### dbgprobe.elf.info
+
+Get ELF metadata for a session. Returns `null` if no ELF is attached.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Returns (attached):
+
+```json
+{
+  "ok": true,
+  "elf": {
+    "path": "/path/to/zephyr.elf",
+    "entry_point": 134217728,
+    "symbol_count": 1234,
+    "function_count": 567,
+    "sections": []
+  }
+}
+```
+
+Returns (not attached):
+
+```json
+{ "ok": true, "elf": null }
+```
+
+### dbgprobe.elf.lookup
+
+Bidirectional symbol lookup. Provide `symbol` for name-to-address, or `address` for address-to-name+offset. Exactly one is required.
+
+Name to address:
+
+```json
+{ "session_id": "p1a2b3c4", "symbol": "main" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "symbol": "main",
+  "address": 134218000,
+  "size": 42,
+  "type": "FUNC"
+}
+```
+
+Address to name:
+
+```json
+{ "session_id": "p1a2b3c4", "address": 134218006 }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "address": 134218006,
+  "symbol": "main",
+  "symbol_offset": 6
+}
+```
+
+### dbgprobe.elf.symbols
+
+Search or list ELF symbols. Optional substring filter, optional type filter, default limit 50.
+
+```json
+{ "session_id": "p1a2b3c4", "filter": "main", "type": "FUNC", "limit": 10 }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "symbols": [
+    { "name": "main", "address": 134218000, "size": 42, "type": "FUNC" }
+  ],
+  "count": 1
+}
+```
+
+### Response enrichment
+
+When an ELF is attached, `dbgprobe.status`, `dbgprobe.step`, and `dbgprobe.halt` automatically include symbol context:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "state": "halted",
+  "pc": 134218006,
+  "symbol": "main",
+  "symbol_offset": 6
+}
+```
+
+### Breakpoint by symbol
+
+`dbgprobe.breakpoint.set` accepts an optional `symbol` parameter. When provided (and an ELF is attached), the symbol is resolved to an address:
+
+```json
+{ "session_id": "p1a2b3c4", "symbol": "main" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "address": 134218000,
+  "bp_type": "sw",
+  "symbol": "main"
+}
+```
+
+### Flash ELF handling
+
+After `dbgprobe.flash`, the response may include:
+
+- `"elf_reloaded": true` — attached ELF was re-parsed (symbols updated)
+- `"elf_detached": true` — ELF file was missing, attachment removed
+- `"elf_hint": "/path/to/zephyr.elf"` — sibling `.elf` found near the flashed file
+
+---
+
 ## Tracing
 
 Tools for inspecting the JSONL trace log. Tracing is enabled by default and records every tool call.
