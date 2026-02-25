@@ -174,7 +174,7 @@ Attach an ELF file to a session to enable symbol-aware debugging:
 - **Symbol lookup** — resolve function names to addresses and vice versa
 - **Breakpoints by name** — `breakpoint.set(symbol="main")` instead of raw addresses
 - **Auto-enriched responses** — `status`, `step`, and `halt` include `symbol` + `symbol_offset` when an ELF is attached
-- **Flash integration** — after flashing, the ELF is auto-reloaded and sibling `.elf` files are suggested
+- **Flash integration** — flashing an `.elf` auto-attaches it; flashing `.hex`/`.bin` auto-reloads a previously attached ELF; sibling `.elf` files are suggested via hints
 
 ```
 > "Attach the ELF, set a breakpoint on main, run, and show me where it halted."
@@ -219,9 +219,12 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 - [ ] **OpenOCD backend** — support ST-Link, CMSIS-DAP, and other probes via OpenOCD subprocess
 - [ ] **pyOCD backend** — native Python probe access via pyOCD library
 - [ ] **RTT support** — Real-Time Transfer (read target output via persistent debug connection)
-- [ ] **Register-level tools** — named peripheral register read/write using SVD files
+- [ ] **SVD support** — named peripheral register read/write using SVD files
 - [x] **Breakpoint support** — hardware and software breakpoints via GDB RSP
 - [x] **GDB integration** — persistent JLinkGDBServer connection with GDB Remote Serial Protocol
+- [x] **ELF support** — symbol lookup, breakpoints by name, auto-enriched responses, flash auto-attach
+- [x] **Hex string addresses** — all address parameters accept hex strings (`"0x20000000"`) in addition to integers
+- [x] **Session-less erase/flash** — erase and flash without an active session (for unlocking secured devices, CI flows)
 - [ ] **Multi-core support** — target specific cores on multi-core SoCs
 - [ ] **Cortex-A/R support** — ARM-mode breakpoints (`kind=4`); currently Thumb-only (Cortex-M)
 ---

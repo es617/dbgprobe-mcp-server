@@ -10,6 +10,7 @@ Target device string: `nRF52840_xxAA`
 - [ ] MCP server installed and registered with correct `DBGPROBE_JLINK_DEVICE=nRF52840_xxAA`
 - [ ] MCP server restarted after latest code changes
 - [ ] A `.hex` firmware file available (e.g. a blinky example)
+- [ ] A `.elf` firmware file available (e.g. `build/zephyr/zephyr.elf`)
 
 ---
 
@@ -48,12 +49,13 @@ Connect first, then:
 
 | # | Test | Expected |
 |---|------|----------|
-| 4.1 | `dbgprobe.mem.read` — FICR DEVICEID at `0x10000060`, 8 bytes, format `hex` | Returns `ok: true`, non-zero hex string (unique device ID). |
+| 4.1 | `dbgprobe.mem.read` — FICR DEVICEID at `"0x10000060"`, 8 bytes, format `hex` | Returns `ok: true`, non-zero hex string (unique device ID). |
 | 4.2 | `dbgprobe.mem.read` — same address, format `u32` | Returns array of 2 u32 values matching the hex from 4.1. |
 | 4.3 | `dbgprobe.mem.read` — same address, format `base64` | Returns base64 string that decodes to same bytes. |
-| 4.4 | `dbgprobe.mem.read` — FICR DEVICEADDR at `0x100000A0`, 8 bytes | Returns device BLE address bytes. |
-| 4.5 | `dbgprobe.mem.write` — write `"deadbeef"` to RAM at `0x20000000`, then read it back | Read returns `"deadbeef"` at those bytes. |
-| 4.6 | `dbgprobe.mem.write` — u32 format: `data_u32: [0x12345678]` to `0x20000000`, read back as hex | Returns `"78563412"` (little-endian). |
+| 4.4 | `dbgprobe.mem.read` — FICR DEVICEADDR at `"0x100000A0"`, 8 bytes | Returns device BLE address bytes. |
+| 4.5 | `dbgprobe.mem.write` — write `"deadbeef"` to RAM at `"0x20000000"`, then read it back | Read returns `"deadbeef"` at those bytes. |
+| 4.6 | `dbgprobe.mem.write` — u32 format: `data_u32: [0x12345678], format: "u32"` to `"0x20000000"`, read back as hex | Returns `"78563412"` (little-endian). Note: `format: "u32"` is required — without it, `data_u32` is ignored and 0 bytes are written. |
+| 4.7 | `dbgprobe.mem.read` with integer address `536870912` (= 0x20000000) | Same result as hex string — both formats accepted. |
 
 ---
 
@@ -62,7 +64,7 @@ Connect first, then:
 | # | Test | Expected |
 |---|------|----------|
 | 5.1 | `dbgprobe.halt` | Returns `ok: true`. |
-| 5.2 | `dbgprobe.mem.read` while halted (RAM at `0x20000000`, 4 bytes) | Returns data successfully. |
+| 5.2 | `dbgprobe.mem.read` while halted (RAM at `"0x20000000"`, 4 bytes) | Returns data successfully. |
 | 5.3 | `dbgprobe.go` | Returns `ok: true`, target resumes. |
 | 5.4 | `dbgprobe.reset` with mode `soft` | Returns `ok: true`. |
 | 5.5 | `dbgprobe.reset` with mode `hard` | Returns `ok: true`. |
@@ -70,68 +72,137 @@ Connect first, then:
 
 ---
 
-## 6. Flash
+## 6. Flash (session-based)
 
 | # | Test | Expected |
 |---|------|----------|
-| 6.1 | `dbgprobe.flash` with a `.hex` file, defaults (verify=true, reset_after=true) | Returns `ok: true`. Board runs the new firmware. |
-| 6.2 | `dbgprobe.flash` with `verify: true, reset_after: false` | Returns `ok: true`. Board does NOT restart (stays halted or at old PC). |
-| 6.3 | `dbgprobe.flash` with nonexistent path | Returns error. |
+| 6.1 | `dbgprobe.flash` with session_id and a `.hex` file, defaults | Returns `ok: true`. Board runs the new firmware. GDB session survives (verify with `status`). |
+| 6.2 | `dbgprobe.flash` with session_id, `verify: true, reset_after: false` | Returns `ok: true`. Board does NOT restart. |
+| 6.3 | `dbgprobe.flash` with session_id and a `.elf` file (no prior ELF attached) | Returns `ok: true`, `elf_attached: true`, `elf_path` in response. `elf.info` confirms ELF is attached. |
+| 6.4 | `dbgprobe.flash` with session_id and a `.elf` file (ELF already attached) | Returns `ok: true`, `elf_reloaded: true`. |
+| 6.5 | `dbgprobe.flash` with session_id and a `.hex` file (ELF attached) | Returns `ok: true`, `elf_reloaded: true` (re-parsed from original ELF path). |
+| 6.6 | `dbgprobe.flash` with `elf_hint` — flash a `.hex`, check response | Response includes `elf_hint` pointing to a sibling `.elf` file (if one exists nearby). |
+| 6.7 | `dbgprobe.flash` with nonexistent path | Returns error. |
 
 ---
 
-## 7. Disconnect
+## 7. Flash (session-less)
 
 | # | Test | Expected |
 |---|------|----------|
-| 7.1 | `dbgprobe.disconnect` with valid session_id | Returns `ok: true`. |
-| 7.2 | `dbgprobe.connections.list` after disconnect | Session no longer listed. |
-| 7.3 | `dbgprobe.mem.read` with disconnected session_id | Returns error (session not found). |
+| 7.1 | `dbgprobe.flash` without session_id, with `device: "nRF52840_xxAA"` and a `.hex` file | Returns `ok: true`. No GDB server left running (`ps aux | grep JLinkGDBServer` shows none). |
+| 7.2 | After session-less flash, `dbgprobe.connect` | Connects successfully — probe is not stuck. |
+| 7.3 | `dbgprobe.flash` session-less without `device` param | Returns error or times out with helpful message about providing device/probe_id. |
 
 ---
 
-## 8. Erase (full chip)
+## 8. Disconnect
 
 | # | Test | Expected |
 |---|------|----------|
-| 8.1 | `dbgprobe.erase` with `device: "nRF52840_xxAA"` (no address params) | Returns `ok: true`, `erased: true`. |
-| 8.2 | Connect after erase, read flash at `0x00000000` (4 bytes) | All `0xFF` (erased flash). |
+| 8.1 | `dbgprobe.disconnect` with valid session_id | Returns `ok: true`. |
+| 8.2 | `dbgprobe.connections.list` after disconnect | Session no longer listed. |
+| 8.3 | `dbgprobe.mem.read` with disconnected session_id | Returns error (session not found). |
 
 ---
 
-## 9. Erase (range)
+## 9. Erase (session-based)
 
 | # | Test | Expected |
 |---|------|----------|
-| 9.1 | Flash firmware first, then `dbgprobe.erase` with `start_addr: 0x00000000, end_addr: 0x00001000` | Returns `ok: true`, `erased: true`, `start_addr` and `end_addr` in response. |
-| 9.2 | Read back erased range — `0x00000000`, 4 bytes | Returns `0xFFFFFFFF`. |
-| 9.3 | Read outside erased range (higher address in flash) | Returns non-FF data (firmware still there). |
-| 9.4 | `dbgprobe.erase` with only `start_addr` (no `end_addr`) | Returns `ok: false`, error `invalid_params`. |
-| 9.5 | `dbgprobe.erase` with `start_addr > end_addr` | Returns `ok: false`, error `invalid_params`. |
+| 9.1 | Flash firmware, then `dbgprobe.erase` with `session_id` (no address params) | Returns `ok: true`, `erased: true`, `session_id` in response. GDB session survives. |
+| 9.2 | Read flash at `"0x00000000"` (4 bytes) after session-based erase | All `0xFF` (erased flash). |
+| 9.3 | `dbgprobe.erase` with `session_id`, `start_addr: "0x00000000"`, `end_addr: "0x1000"` | Returns `ok: true`, range erase through GDB. |
 
 ---
 
-## 10. Secured device (APPROTECT) flow
+## 10. Erase (session-less)
+
+| # | Test | Expected |
+|---|------|----------|
+| 10.1 | `dbgprobe.erase` with `device: "nRF52840_xxAA"` (no session_id, no address params) | Returns `ok: true`, `erased: true`, `config` in response. |
+| 10.2 | Connect after session-less erase, read flash at `"0x00000000"` (4 bytes) | All `0xFF` (erased flash). |
+| 10.3 | `dbgprobe.erase` with `start_addr: "0x00000000"`, `end_addr: "0x1000"` (session-less range) | Returns `ok: true`. |
+| 10.4 | Read outside erased range (higher address in flash) | Returns non-FF data (firmware still there). |
+| 10.5 | `dbgprobe.erase` with only `start_addr` (no `end_addr`) | Returns `ok: false`, error `invalid_params`. |
+| 10.6 | `dbgprobe.erase` with `start_addr > end_addr` | Returns `ok: false`, error `invalid_params`. |
+
+---
+
+## 11. ELF support
+
+Connect first, then:
+
+| # | Test | Expected |
+|---|------|----------|
+| 11.1 | `dbgprobe.elf.attach` with path to `.elf` file | Returns `ok: true`, `symbol_count`, `function_count`, `entry_point`, `sections`. |
+| 11.2 | `dbgprobe.elf.info` | Returns ELF metadata matching 11.1. |
+| 11.3 | `dbgprobe.elf.lookup` with `symbol: "main"` | Returns address, size, type `"FUNC"`. |
+| 11.4 | `dbgprobe.elf.lookup` with `address` (use address from 11.3) | Returns `symbol: "main"`, `symbol_offset: 0`. |
+| 11.5 | `dbgprobe.elf.lookup` with hex string address (e.g. `"0x112AC"`) | Same result as integer — hex strings accepted. |
+| 11.6 | `dbgprobe.elf.symbols` with `filter: "main"` | Returns matching symbols. |
+| 11.7 | `dbgprobe.elf.symbols` with `type: "FUNC"`, `limit: 5` | Returns up to 5 function symbols. |
+| 11.8 | `dbgprobe.status` with ELF attached | Response includes `symbol` and `symbol_offset` for the current PC. |
+| 11.9 | `dbgprobe.halt` with ELF attached | Response includes `symbol` and `symbol_offset`. |
+| 11.10 | `dbgprobe.step` with ELF attached (halt first) | Response includes `symbol` and `symbol_offset`. |
+| 11.11 | `dbgprobe.elf.info` after disconnect + reconnect | Returns `elf: null` — ELF is not persisted across sessions. |
+
+---
+
+## 12. Breakpoints
+
+Connect and attach ELF, then:
+
+| # | Test | Expected |
+|---|------|----------|
+| 12.1 | `dbgprobe.breakpoint.set` with `address: "0x08000100"` (hex string) | Returns `ok: true`, `address`, `bp_type: "sw"`. |
+| 12.2 | `dbgprobe.breakpoint.set` with `symbol: "main"` | Returns `ok: true`, `address` (resolved), `symbol: "main"`. |
+| 12.3 | `dbgprobe.breakpoint.list` | Shows breakpoints from 12.1 and 12.2. |
+| 12.4 | `dbgprobe.breakpoint.clear` with `address: "0x08000100"` | Returns `ok: true`. |
+| 12.5 | `dbgprobe.breakpoint.set` with `symbol` but no ELF attached | Returns `ok: false`, error `no_elf`. |
+| 12.6 | `dbgprobe.breakpoint.set` with both `address` and `symbol` | Returns `ok: false`, error `invalid_params`. |
+| 12.7 | Set breakpoint on `main`, `go`, wait for halt, `status` | Status shows PC matching breakpoint address, `symbol: "main"`, `symbol_offset: 0`. Note: reason may show `"halted"` instead of `"breakpoint"` — J-Link's GDB server doesn't include `swbreak` in stop replies. Verify by checking PC matches the breakpoint address. |
+| 12.8 | Flash new firmware — `breakpoint.list` after flash | Empty — breakpoints cleared on flash. |
+
+---
+
+## 13. Secured device (APPROTECT) flow
 
 This tests the full lock/unlock cycle. **Warning: this erases all flash.**
 
+Enabling APPROTECT on nRF52840 requires an NVMC flash write sequence (not a simple memory write). Steps 13.1–13.2 use the NVMC register sequence to write to UICR.
+
 | # | Step | Expected |
 |---|------|----------|
-| 10.1 | Connect, write `0x00` to UICR APPROTECT at `0x10001208`, reset | Write and reset succeed. |
-| 10.2 | Disconnect, then `dbgprobe.connect` | Returns `ok: false`, error code `device_secured`, message mentions `dbgprobe.erase`. |
-| 10.3 | `dbgprobe.erase` (full chip, no address params) | Returns `ok: true`, `erased: true`. |
-| 10.4 | `dbgprobe.connect` again | Returns `ok: true` — device is unlocked. |
-| 10.5 | Read UICR APPROTECT at `0x10001208` (4 bytes) | Returns `0xFFFFFFFF` (erased/unlocked). |
+| 13.1 | Connect. Enable NVMC write: write `0x01` to NVMC CONFIG at `"0x4001E504"`. Write `0x00` to UICR APPROTECT at `"0x10001208"`. Disable NVMC write: write `0x00` to `"0x4001E504"`. | All writes succeed. |
+| 13.2 | Reset (hard), disconnect, then `dbgprobe.connect` | Returns `ok: false`, error code `device_secured`, message mentions `dbgprobe.erase`. |
+| 13.3 | `dbgprobe.erase` (session-less, full chip, no address params) | Returns `ok: true`, `erased: true`. |
+| 13.4 | `dbgprobe.connect` again | Returns `ok: true` — device is unlocked. |
+| 13.5 | Read UICR APPROTECT at `"0x10001208"` (4 bytes) | Returns `0xFFFFFFFF` (erased/unlocked). |
 
 ---
 
-## 11. Error messages and diagnostics
+## 14. Session-less flow (no connect)
+
+Full flow without an active session:
+
+| # | Step | Expected |
+|---|------|----------|
+| 14.1 | `dbgprobe.erase` (session-less, full chip) | Returns `ok: true`. |
+| 14.2 | `dbgprobe.flash` (session-less, `.hex` file) | Returns `ok: true`. Board runs firmware. |
+| 14.3 | `ps aux \| grep JLinkGDBServer` | No orphaned GDB server processes. |
+| 14.4 | `dbgprobe.connect` | Connects successfully — no probe lock-up from prior operations. |
+| 14.5 | `dbgprobe.status` | Returns target state (running or halted). |
+
+---
+
+## 15. Error messages and diagnostics
 
 | # | Test | Expected |
 |---|------|----------|
-| 11.1 | Connect with wrong device string | Error message includes "InitTarget() failed" and probe-vs-target hint. |
-| 11.2 | Connect failure includes JLink output | Error response contains `[JLink output]` section with raw JLinkExe stdout. |
-| 11.3 | `device_secured` error includes JLink output | Same — raw output attached for debugging. |
+| 15.1 | Connect with wrong device string | Error message includes "InitTarget() failed" and probe-vs-target hint. |
+| 15.2 | Connect failure includes JLink output | Error response contains `[JLink output]` section with raw JLinkExe stdout. |
+| 15.3 | `device_secured` error includes JLink output | Same — raw output attached for debugging. |
 
 ---
 
@@ -141,8 +212,11 @@ If short on time, run these in order:
 
 1. `dbgprobe.list_probes` — board shows up
 2. `dbgprobe.connect` with `device: "nRF52840_xxAA"` — session created
-3. `dbgprobe.mem.read` at `0x10000060`, 8 bytes — device ID returned
+3. `dbgprobe.mem.read` at `"0x10000060"`, 8 bytes — device ID returned
 4. `dbgprobe.halt` then `dbgprobe.go` — both succeed
-5. `dbgprobe.reset` — succeeds
-6. `dbgprobe.disconnect` — session closed
-7. `dbgprobe.erase` (full chip) — erased successfully
+5. `dbgprobe.flash` with session_id and `.elf` file — `elf_attached: true` in response
+6. `dbgprobe.elf.lookup` with `symbol: "main"` — address returned
+7. `dbgprobe.breakpoint.set` with `symbol: "main"` — breakpoint set
+8. `dbgprobe.reset` — succeeds
+9. `dbgprobe.disconnect` — session closed
+10. `dbgprobe.erase` (session-less, full chip) — erased successfully
