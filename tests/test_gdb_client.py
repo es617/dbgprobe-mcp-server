@@ -270,6 +270,17 @@ class TestGdbClientRegisters:
         with pytest.raises(GdbProtocolError, match="Register read error"):
             await gdb_client.read_registers()
 
+    async def test_read_register(self, mock_server: MockGdbServer, gdb_client: GdbClient):
+        # PC = 0x0800_0100 in little-endian hex
+        mock_server.enqueue("00010008")
+        val = await gdb_client.read_register(15)
+        assert val == 0x0800_0100
+
+    async def test_read_register_error(self, mock_server: MockGdbServer, gdb_client: GdbClient):
+        mock_server.enqueue("E01")
+        with pytest.raises(GdbProtocolError, match="Register read error"):
+            await gdb_client.read_register(15)
+
 
 class TestStopReplyDataclass:
     def test_defaults(self):

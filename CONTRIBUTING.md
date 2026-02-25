@@ -169,6 +169,76 @@ python -m pytest tests/test_jlink.py -v
 python -m pytest tests/test_handlers_probe.py::TestMemRead -v
 ```
 
+## GDB RSP traffic proxy
+
+`tools/gdb_proxy.py` is a TCP proxy that sits between a GDB client and JLinkGDBServer, logging every packet in both directions. Useful for understanding what GDB does under the hood and comparing it with our GDB client implementation.
+
+### Setup
+
+Terminal 1 — start JLinkGDBServer:
+```bash
+/Applications/SEGGER/JLink/JLinkGDBServerCLExe \
+  -device NRF52840_XXAA -if SWD -speed 4000 -port 2331 \
+  -nogui -localhostonly 1
+```
+
+Terminal 2 — start the proxy:
+```bash
+python tools/gdb_proxy.py 3333 2331
+```
+
+Terminal 3 — connect GDB through the proxy:
+```bash
+# Find GDB in your toolchain (Nordic/Zephyr example):
+/opt/nordic/ncs/toolchains/e5f4758bcf/opt/zephyr-sdk/arm-zephyr-eabi/bin/arm-zephyr-eabi-gdb \
+  build/peripheral_uart/zephyr/zephyr.elf
+
+(gdb) target remote localhost:3333
+```
+
+All traffic is printed to the terminal and logged to `/tmp/gdb_rsp_traffic.log`.
+
+### Example: breakpoint behavior
+
+Software breakpoint (GDB default):
+```
+(gdb) break main
+(gdb) continue        # runs, hits breakpoint
+(gdb) continue        # GDB sends: z0 (remove) → Z0 (re-insert) → c
+```
+
+Hardware breakpoint:
+```
+(gdb) hbreak main
+(gdb) continue        # runs, hits breakpoint
+(gdb) continue        # GDB sends: z1 (remove) → Z1 (re-insert) → c
+```
+
+Key finding: GDB removes the breakpoint before `c` and re-inserts it after. This is required for hardware breakpoints (FPB re-triggers if armed at current PC) and is standard practice for software breakpoints too.
+
+### GDB RSP quick reference
+
+| Packet | Direction | Meaning |
+|---|---|---|
+| `$c#63` | GDB→stub | Continue |
+| `$s#73` | GDB→stub | Single step |
+| `\x03` | GDB→stub | Interrupt (halt) |
+| `$?#3f` | GDB→stub | Query status |
+| `$Z0,addr,kind` | GDB→stub | Set software breakpoint |
+| `$Z1,addr,kind` | GDB→stub | Set hardware breakpoint |
+| `$z0,addr,kind` | GDB→stub | Remove software breakpoint |
+| `$z1,addr,kind` | GDB→stub | Remove hardware breakpoint |
+| `$m addr,len` | GDB→stub | Read memory |
+| `$M addr,len:hex` | GDB→stub | Write memory |
+| `$g` | GDB→stub | Read all registers |
+| `$p reg` | GDB→stub | Read single register |
+| `$qRcmd,hex` | GDB→stub | Monitor command |
+| `$T05...` | stub→GDB | Stop reply (SIGTRAP) |
+| `$S05` | stub→GDB | Stop reply (no thread info) |
+| `+` | either | ACK |
+
+`kind`: 2 = Thumb (Cortex-M), 4 = ARM (Cortex-A/R).
+
 ## MCP Inspector
 
 The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) lets you call tools without an agent:

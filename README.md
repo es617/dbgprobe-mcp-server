@@ -203,13 +203,15 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 - [x] **Breakpoint support** — hardware and software breakpoints via GDB RSP
 - [x] **GDB integration** — persistent JLinkGDBServer connection with GDB Remote Serial Protocol
 - [ ] **Multi-core support** — target specific cores on multi-core SoCs
+- [ ] **Cortex-A/R support** — ARM-mode breakpoints (`kind=4`); currently Thumb-only (Cortex-M)
 ---
 
 ## Known limitations
 
 - **Single-client only.** The server handles one MCP session at a time (stdio transport).
 - **No RTT yet.** RTT (Real-Time Transfer) is planned for a future version.
-- **Flash operations restart GDBServer.** Flashing firmware tears down and reconnects the GDB session, which clears breakpoints.
+- **Flash clears breakpoints.** Flashing new firmware invalidates breakpoints (the code at those addresses may have changed). The session stays alive but breakpoints are cleared.
+- **Cortex-M only.** Breakpoints use Thumb-mode (`kind=2`). Cortex-A/R targets (ARM-mode, `kind=4`) are not yet supported.
 
 ---
 

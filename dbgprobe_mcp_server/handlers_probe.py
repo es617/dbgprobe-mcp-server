@@ -45,7 +45,9 @@ TOOLS: list[Tool] = [
         name="dbgprobe.connect",
         description=(
             "Establish a debug probe session. Returns a session_id and the "
-            "resolved configuration (backend, executable paths, defaults applied)."
+            "resolved configuration (backend, executable paths, defaults applied). "
+            "The target is halted after connecting — this is inherent to the debug "
+            "probe connection. Use dbgprobe.go to resume execution if needed."
         ),
         inputSchema={
             "type": "object",
@@ -295,9 +297,9 @@ TOOLS: list[Tool] = [
     Tool(
         name="dbgprobe.breakpoint.set",
         description=(
-            "Set a hardware or software breakpoint at a target address. "
-            "Hardware breakpoints (default) are limited in number but work on flash. "
-            "Software breakpoints modify memory and only work in RAM."
+            "Set a breakpoint at a target address. Software breakpoints (default) "
+            "are handled by the debug probe and work on both flash and RAM. "
+            "Hardware breakpoints use the CPU's FPB and are limited in number (typically 4-6)."
         ),
         inputSchema={
             "type": "object",
@@ -310,7 +312,7 @@ TOOLS: list[Tool] = [
                 "bp_type": {
                     "type": "string",
                     "enum": ["hw", "sw"],
-                    "description": "Breakpoint type: 'hw' (hardware, default) or 'sw' (software).",
+                    "description": "Breakpoint type: 'sw' (software, default) or 'hw' (hardware).",
                 },
             },
             "required": ["session_id", "address"],
@@ -470,6 +472,24 @@ async def handle_reset(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
         return _err("invalid_params", f"Invalid reset mode: {mode!r}. Use soft, hard, or halt.")
 
     result = await session.backend.reset(mode)
+
+    # Re-set breakpoints — reset may clear CPU debug registers (FPB).
+    # Clear all first to avoid duplicates (soft reset may NOT clear FPB).
+    if session.breakpoints:
+        try:
+            await session.backend.clear_all_breakpoints()
+        except (NotImplementedError, ConnectionError):
+            pass
+        restored = 0
+        for bp in session.breakpoints.values():
+            try:
+                await session.backend.set_breakpoint(bp.address, bp_type=bp.bp_type)
+                restored += 1
+            except (NotImplementedError, ConnectionError):
+                pass
+        if restored:
+            result["breakpoints_restored"] = restored
+
     return _ok(session_id=args["session_id"], **result)
 
 
@@ -481,7 +501,29 @@ async def handle_halt(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]
 
 async def handle_go(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
+
+    # Remove breakpoint at current PC before continuing, re-insert after.
+    # This is standard GDB behavior — without it, hardware breakpoints
+    # (FPB) re-trigger immediately, and software breakpoints may too.
+    bp_to_restore = None
+    if session.breakpoints:
+        try:
+            status = await session.backend.status()
+            pc = status.get("pc")
+            if pc is not None and pc in session.breakpoints:
+                bp_to_restore = session.breakpoints[pc]
+                await session.backend.clear_breakpoint(pc)
+        except (NotImplementedError, ConnectionError):
+            pass
+
     result = await session.backend.go()
+
+    if bp_to_restore is not None:
+        try:
+            await session.backend.set_breakpoint(bp_to_restore.address, bp_type=bp_to_restore.bp_type)
+        except (NotImplementedError, ConnectionError):
+            pass
+
     return _ok(session_id=args["session_id"], **result)
 
 
@@ -586,7 +628,7 @@ async def handle_status(state: ProbeState, args: dict[str, Any]) -> dict[str, An
 async def handle_breakpoint_set(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
     address = args["address"]
-    bp_type = args.get("bp_type", "hw")
+    bp_type = args.get("bp_type", "sw")
 
     if bp_type not in ("hw", "sw"):
         return _err("invalid_params", f"Invalid breakpoint type: {bp_type!r}. Use 'hw' or 'sw'.")

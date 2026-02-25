@@ -12,6 +12,16 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger("dbgprobe_mcp_server")
 
+_TRACE_FILE = "/tmp/gdb_trace.log"
+
+
+def _trace(msg: str) -> None:
+    import time
+
+    with open(_TRACE_FILE, "a") as f:
+        f.write(f"{time.time():.3f} {msg}\n")
+
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -282,6 +292,9 @@ class GdbClient:
 
     def _dispatch_packet(self, body: str) -> None:
         """Route a received packet body to the right channel."""
+        _trace(
+            f"dispatch: body={body[:40]} response_event={self._response_event.is_set()} stop_event={self._stop_event.is_set()}"
+        )
         if body.startswith("O") and body != "OK" and len(body) > 1:
             # Console output (O<hex-encoded-text>) — log and discard.
             # "OK" is a normal response, not console output.
@@ -346,8 +359,12 @@ class GdbClient:
             raise GdbConnectionError("Not connected to GDB stub")
         self._stop_event.clear()
         pkt = _make_packet("c")
+        _trace(
+            f"continue: stop_event={self._stop_event.is_set()} response_event={self._response_event.is_set()}, sending $c"
+        )
         self._writer.write(pkt)  # type: ignore[union-attr]
         await self._writer.drain()  # type: ignore[union-attr]
+        _trace(f"continue: sent, stop_event={self._stop_event.is_set()}")
 
     async def step(self, timeout: float = 10.0) -> StopReply:
         """Single-step one instruction.  Returns the stop reply."""
@@ -356,6 +373,7 @@ class GdbClient:
 
     async def halt(self, timeout: float = 5.0) -> StopReply:
         """Send interrupt (\\x03) and wait for the stop reply."""
+        _trace("halt: clearing stop_event, sending \\x03")
         self._stop_event.clear()
         await self.send_interrupt()
         # The stop reply may come as an async stop or as a direct response.
@@ -371,17 +389,19 @@ class GdbClient:
 
     async def query_status(self) -> StopReply:
         """Query current target status via '?'."""
+        _trace("query_status: sending ?")
         resp = await self.send_packet("?")
+        _trace(f"query_status: resp={resp[:40]}")
         return _parse_stop_reply(resp)
 
-    async def set_breakpoint(self, bp_type: int, addr: int, kind: int = 4) -> None:
-        """Set a breakpoint.  *bp_type*: 0=software, 1=hardware."""
+    async def set_breakpoint(self, bp_type: int, addr: int, kind: int = 2) -> None:
+        """Set a breakpoint.  *bp_type*: 0=software, 1=hardware.  *kind*: 2=Thumb, 4=ARM."""
         resp = await self.send_packet(f"Z{bp_type},{addr:x},{kind}")
         if resp != "OK":
             raise GdbProtocolError(f"Failed to set breakpoint at 0x{addr:08x}: {resp}")
 
-    async def clear_breakpoint(self, bp_type: int, addr: int, kind: int = 4) -> None:
-        """Clear a breakpoint.  *bp_type*: 0=software, 1=hardware."""
+    async def clear_breakpoint(self, bp_type: int, addr: int, kind: int = 2) -> None:
+        """Clear a breakpoint.  *bp_type*: 0=software, 1=hardware.  *kind*: 2=Thumb, 4=ARM."""
         resp = await self.send_packet(f"z{bp_type},{addr:x},{kind}")
         if resp != "OK":
             raise GdbProtocolError(f"Failed to clear breakpoint at 0x{addr:08x}: {resp}")
@@ -396,6 +416,15 @@ class GdbClient:
         # in the reader loop.
         return resp
 
+    async def read_register(self, reg_num: int) -> int:
+        """Read a single register by GDB register number (p packet)."""
+        resp = await self.send_packet(f"p{reg_num:x}")
+        if resp.startswith("E"):
+            raise GdbProtocolError(f"Register read error: {resp}")
+        raw = bytes.fromhex(resp)
+        # Little-endian 32-bit for ARM
+        return int.from_bytes(raw[:4], "little")
+
     async def read_registers(self) -> bytes:
         """Read all registers (g packet)."""
         resp = await self.send_packet("g")
@@ -405,8 +434,13 @@ class GdbClient:
 
     async def wait_stop(self, timeout: float = 30.0) -> StopReply:
         """Wait for an asynchronous stop reply (e.g. after continue)."""
+        _trace(
+            f"wait_stop: stop_event={self._stop_event.is_set()} stop_data={self._stop_data[:40] if self._stop_data else '(empty)'} timeout={timeout}"
+        )
         try:
             await asyncio.wait_for(self._stop_event.wait(), timeout=timeout)
         except TimeoutError:
+            _trace("wait_stop: TIMEOUT")
             raise GdbTimeoutError("Timeout waiting for target to stop") from None
+        _trace(f"wait_stop: got stop_data={self._stop_data[:40]}")
         return _parse_stop_reply(self._stop_data)
