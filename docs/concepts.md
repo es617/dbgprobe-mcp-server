@@ -27,9 +27,9 @@ The J-Link backend uses two SEGGER tools concurrently:
 
 - **JLinkGDBServer** — persistent process, speaks GDB Remote Serial Protocol over TCP. Handles all session operations: halt, go, step, memory read/write, breakpoints, reset. Gives low-latency access through an open TCP socket.
 
-- **JLinkExe** (Commander) — one-shot subprocess for flash and erase. Supports all firmware formats (.hex, .elf, .bin) natively. Also used for `list_probes` (session-less).
+- **JLinkExe** (Commander) — one-shot subprocess for flash and erase. Supports all firmware formats (.hex, .elf, .bin) natively. Also used for `list_probes` and session-less erase/flash.
 
-SEGGER's J-Link software supports multiple simultaneous connections to the same probe, so JLinkExe can flash while JLinkGDBServer holds a persistent connection — no teardown needed.
+For session-based flash, the server tears down the GDB connection, flashes via JLinkExe, and restarts GDB automatically. Session-based erase uses `monitor flash erase` through GDB (no USB contention). Session-less operations use JLinkExe directly.
 
 ### Backend abstraction
 
@@ -51,6 +51,7 @@ A session represents a connection to a specific probe + target combination. Crea
 - The backend instance (e.g. JLinkBackend with live GDBServer + GDB client)
 - Resolved configuration (device, interface, speed, probe serial)
 - Active breakpoints (tracked in session state)
+- Optional attached ELF (symbol table for address↔name resolution)
 - Optional attached protocol spec
 - Timestamps
 
@@ -167,6 +168,9 @@ After connecting, the agent follows this flow:
 ```
 Connect to probe
        │
+       ├──► dbgprobe.elf.attach (if ELF path known — enables symbol breakpoints,
+       │                          address→symbol enrichment in status/step/halt)
+       │
        ▼
 Check dbgprobe.spec.list ──── matching spec? ──── yes ──► dbgprobe.spec.attach
        │                                                       │
@@ -184,7 +188,7 @@ Check dbgprobe.plugin.list ◄────────────────�
   with raw debug probe tools
 ```
 
-The tool descriptions guide it through each step.
+The tool descriptions guide it through each step. When flashing an `.elf` file with a session, the ELF is auto-attached — no explicit `elf.attach` needed.
 
 ---
 

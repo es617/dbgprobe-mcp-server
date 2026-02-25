@@ -72,9 +72,22 @@ Returns:
 
 ### dbgprobe.erase
 
-Erase target flash. With no address params: full chip erase (unlocks secured/read-protected devices like Nordic APPROTECT). With `start_addr` and `end_addr`: erase only that range. Does not require a session.
+Erase target flash. With no address params: full chip erase (unlocks secured/read-protected devices like Nordic APPROTECT). With `start_addr` and `end_addr`: erase only that range.
 
-Full chip erase:
+Two modes:
+
+- **Session-based** (preferred) — provide `session_id`. Erases through the active GDB session via `monitor flash erase`. No USB contention.
+- **Session-less** — omit `session_id`. Uses JLinkExe directly. For unlocking secured devices before connect, etc.
+
+Session-based full erase:
+
+```json
+{
+  "session_id": "p1a2b3c4"
+}
+```
+
+Session-less full erase:
 
 ```json
 {
@@ -82,19 +95,29 @@ Full chip erase:
 }
 ```
 
-Range erase:
+Range erase (addresses accept integers or hex strings):
 
 ```json
 {
-  "device": "nRF52840_xxAA",
-  "start_addr": 262144,
-  "end_addr": 524288
+  "session_id": "p1a2b3c4",
+  "start_addr": "0x40000",
+  "end_addr": "0x80000"
 }
 ```
 
-All parameters are optional. Defaults come from environment variables. `start_addr` and `end_addr` must both be provided for a range erase.
+`start_addr` and `end_addr` must both be provided for a range erase.
 
-Returns (full erase):
+Returns (session-based):
+
+```json
+{
+  "ok": true,
+  "erased": true,
+  "session_id": "p1a2b3c4"
+}
+```
+
+Returns (session-less):
 
 ```json
 {
@@ -107,18 +130,6 @@ Returns (full erase):
     "speed_khz": 4000,
     "probe_serial": null
   }
-}
-```
-
-Returns (range erase):
-
-```json
-{
-  "ok": true,
-  "erased": true,
-  "start_addr": 262144,
-  "end_addr": 524288,
-  "config": { "..." : "..." }
 }
 ```
 
@@ -164,20 +175,37 @@ Resume target execution.
 
 Program a firmware image to the target.
 
+Two modes:
+
+- **Session-based** (preferred) — provide `session_id`. Tears down GDB, flashes via JLinkExe, and restarts GDB automatically.
+- **Session-less** — omit `session_id`. Uses JLinkExe directly. Requires `device` (and optionally `probe_id`).
+
+Session-based:
+
 ```json
 {
   "session_id": "p1a2b3c4",
   "path": "/path/to/firmware.hex",
-  "addr": null,
   "verify": true,
   "reset_after": true
 }
 ```
 
+Session-less:
+
+```json
+{
+  "path": "/path/to/firmware.hex",
+  "device": "nRF52840_xxAA"
+}
+```
+
 - `.hex` and `.elf` files: address is auto-detected from the file
-- `.bin` files: `addr` is **required** (e.g. `0x08000000`)
+- `.bin` files: `addr` is **required** (e.g. `"0x08000000"` or `134217728`)
 - `verify`: verify flash contents after programming (default: true)
 - `reset_after`: reset and run after programming (default: true)
+
+**ELF auto-attach:** When flashing an `.elf` file with a session, the ELF is automatically parsed and attached (or updated if one was already attached). No manual `elf.attach` needed.
 
 Returns:
 
@@ -187,9 +215,17 @@ Returns:
   "session_id": "p1a2b3c4",
   "file": "/path/to/firmware.hex",
   "verified": true,
-  "reset": true
+  "reset": true,
+  "elf_hint": "/path/to/zephyr.elf"
 }
 ```
+
+Additional response fields (when applicable):
+
+- `"elf_attached": true` — ELF auto-attached from flashed `.elf` file (no prior ELF)
+- `"elf_reloaded": true` — existing ELF re-parsed (symbols updated)
+- `"elf_detached": true` — ELF file missing, attachment removed
+- `"elf_hint": "/path/to.elf"` — sibling `.elf` found near the flashed file
 
 ### dbgprobe.mem.read
 
@@ -198,11 +234,13 @@ Read memory from the target.
 ```json
 {
   "session_id": "p1a2b3c4",
-  "address": 536870912,
+  "address": "0x20000000",
   "length": 16,
   "format": "hex"
 }
 ```
+
+Addresses accept integers or hex strings (e.g. `536870912` or `"0x20000000"`).
 
 `format` options:
 - `hex` (default) — hex string, e.g. `"deadbeef01020304"`
@@ -242,11 +280,13 @@ Write data to target memory.
 ```json
 {
   "session_id": "p1a2b3c4",
-  "address": 536870912,
+  "address": "0x20000000",
   "data": "deadbeef",
   "format": "hex"
 }
 ```
+
+Addresses accept integers or hex strings.
 
 `format` options:
 - `hex` (default) — provide `data` as hex string
@@ -258,7 +298,7 @@ Example with u32:
 ```json
 {
   "session_id": "p1a2b3c4",
-  "address": 536870912,
+  "address": "0x20000000",
   "data_u32": [3735928559, 3405691582],
   "format": "u32"
 }
@@ -317,17 +357,28 @@ Returns (running):
 
 ### dbgprobe.breakpoint.set
 
-Set a breakpoint at a target address.
+Set a breakpoint at a target address or symbol name.
+
+By address (accepts integers or hex strings):
 
 ```json
 {
   "session_id": "p1a2b3c4",
-  "address": 134218000,
+  "address": "0x08000100",
   "bp_type": "sw"
 }
 ```
 
-`bp_type` is optional (default: `sw`). Options:
+By symbol (requires ELF attached):
+
+```json
+{
+  "session_id": "p1a2b3c4",
+  "symbol": "main"
+}
+```
+
+Provide `address` or `symbol`, not both. `bp_type` is optional (default: `sw`). Options:
 - `sw` — software breakpoint (default). Handled by the debug probe, works on both flash and RAM.
 - `hw` — hardware breakpoint. Uses the CPU's FPB registers (limited to 4-6 slots on Cortex-M).
 
@@ -338,18 +389,21 @@ Returns:
   "ok": true,
   "session_id": "p1a2b3c4",
   "address": 134218000,
-  "bp_type": "sw"
+  "bp_type": "sw",
+  "symbol": "main"
 }
 ```
 
+`symbol` is included in the response only when set by symbol name.
+
 ### dbgprobe.breakpoint.clear
 
-Clear a breakpoint at a target address.
+Clear a breakpoint at a target address (accepts integers or hex strings).
 
 ```json
 {
   "session_id": "p1a2b3c4",
-  "address": 134218000
+  "address": "0x08000100"
 }
 ```
 
@@ -637,9 +691,10 @@ Returns:
 
 ### Flash ELF handling
 
-After `dbgprobe.flash`, the response may include:
+After `dbgprobe.flash` (session-based), the response may include:
 
-- `"elf_reloaded": true` — attached ELF was re-parsed (symbols updated)
+- `"elf_attached": true` — flashed `.elf` file was auto-attached (no prior ELF)
+- `"elf_reloaded": true` — existing ELF re-parsed with updated symbols (either from flashed `.elf` or re-parsed from previously attached path)
 - `"elf_detached": true` — ELF file was missing, attachment removed
 - `"elf_hint": "/path/to/zephyr.elf"` — sibling `.elf` found near the flashed file
 
