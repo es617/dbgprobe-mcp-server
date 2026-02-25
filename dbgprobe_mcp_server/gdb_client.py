@@ -9,12 +9,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import tempfile
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("dbgprobe_mcp_server")
 
 _GDB_TRACE = os.environ.get("DBGPROBE_GDB_TRACE", "").lower() in ("1", "true", "yes")
-_GDB_TRACE_FILE = os.environ.get("DBGPROBE_GDB_TRACE_FILE", "/tmp/gdb_trace.log")
+_GDB_TRACE_FILE = os.environ.get(
+    "DBGPROBE_GDB_TRACE_FILE", os.path.join(tempfile.gettempdir(), "gdb_trace.log")
+)
 
 
 def _trace(msg: str) -> None:
@@ -238,7 +241,8 @@ class GdbClient:
 
     async def _read_loop(self) -> None:
         """Background task: read GDB packets from TCP stream."""
-        assert self._reader is not None
+        if self._reader is None:
+            return
         try:
             while not self._closed:
                 byte = await self._reader.read(1)
@@ -282,7 +286,8 @@ class GdbClient:
 
     async def _read_until_hash(self) -> bytes:
         """Read until we see '#XX' (hash + 2 hex checksum chars)."""
-        assert self._reader is not None
+        if self._reader is None:
+            raise GdbConnectionError("Not connected")
         buf = bytearray()
         while True:
             b = await self._reader.read(1)

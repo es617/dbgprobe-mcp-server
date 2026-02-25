@@ -477,7 +477,8 @@ class JLinkBackend(Backend):
         collected_output = ""
         try:
             deadline = asyncio.get_event_loop().time() + 10.0
-            assert self._gdbserver_proc.stdout is not None
+            if self._gdbserver_proc.stdout is None:
+                raise ConnectionError("JLinkGDBServer stdout not available")
             while asyncio.get_event_loop().time() < deadline:
                 remaining = deadline - asyncio.get_event_loop().time()
                 try:
