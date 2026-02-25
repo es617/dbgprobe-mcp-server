@@ -592,6 +592,21 @@ class JLinkBackend(Backend):
             raise ConnectionError("GDB connection lost. Disconnect and reconnect.")
         return self._gdb_client
 
+    async def _read_pc(self, client: GdbClient) -> int | None:
+        """Read the PC via GDB 'p' command (register 15)."""
+        try:
+            return await client.read_register(15)
+        except Exception:
+            pass
+        return None
+
+    async def _get_pc(self, client: GdbClient, sr_registers: dict[int, int]) -> int | None:
+        """Get PC from stop reply registers, falling back to register read."""
+        pc = sr_registers.get(15)
+        if pc is None:
+            pc = await self._read_pc(client)
+        return pc
+
     async def halt(self) -> dict[str, Any]:
         client = self._require_gdb()
         try:
@@ -600,7 +615,8 @@ class JLinkBackend(Backend):
             else:
                 sr = await client.query_status()
             self._target_running = False
-            return {"pc": sr.registers.get(15), "reason": sr.reason, "signal": sr.signal}
+            pc = await self._get_pc(client, sr.registers)
+            return {"pc": pc, "reason": sr.reason, "signal": sr.signal}
         except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
             raise ConnectionError(str(exc)) from exc
 
@@ -621,7 +637,8 @@ class JLinkBackend(Backend):
             sr = await client.step()
             self._target_running = False
             reason = "step" if sr.reason == "halted" else sr.reason
-            return {"pc": sr.registers.get(15), "reason": reason, "signal": sr.signal}
+            pc = await self._get_pc(client, sr.registers)
+            return {"pc": pc, "reason": reason, "signal": sr.signal}
         except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
             raise ConnectionError(str(exc)) from exc
 
@@ -633,9 +650,10 @@ class JLinkBackend(Backend):
                 try:
                     sr = await asyncio.wait_for(client.wait_stop(timeout=0.1), timeout=0.2)
                     self._target_running = False
+                    pc = await self._get_pc(client, sr.registers)
                     return {
                         "state": "halted",
-                        "pc": sr.registers.get(15),
+                        "pc": pc,
                         "reason": sr.reason,
                         "signal": sr.signal,
                     }
@@ -643,9 +661,10 @@ class JLinkBackend(Backend):
                     return {"state": "running"}
             else:
                 sr = await client.query_status()
+                pc = await self._get_pc(client, sr.registers)
                 return {
                     "state": "halted",
-                    "pc": sr.registers.get(15),
+                    "pc": pc,
                     "reason": sr.reason,
                     "signal": sr.signal,
                 }
@@ -660,14 +679,24 @@ class JLinkBackend(Backend):
             elif mode == "halt":
                 await client.monitor_command("reset")
                 await client.monitor_command("halt")
-                self._target_running = False
-                return {"mode": mode}
             else:
                 await client.monitor_command("reset")
 
-            # For soft and hard resets, target is running after reset
-            self._target_running = True
-            return {"mode": mode}
+            # After any reset, query the GDB stub to sync state.
+            # The stub knows whether the target is halted or running.
+            try:
+                sr = await client.query_status()
+                self._target_running = False
+                pc = await self._get_pc(client, sr.registers)
+                return {
+                    "mode": mode,
+                    "pc": pc,
+                    "state": "halted",
+                }
+            except GdbTimeoutError:
+                # Target is running (no stop reply from ?)
+                self._target_running = True
+                return {"mode": mode, "state": "running"}
         except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
             raise ConnectionError(str(exc)) from exc
 
@@ -690,9 +719,9 @@ class JLinkBackend(Backend):
     # Breakpoints
     # ------------------------------------------------------------------
 
-    async def set_breakpoint(self, address: int, bp_type: str = "hw") -> dict[str, Any]:
+    async def set_breakpoint(self, address: int, bp_type: str = "sw") -> dict[str, Any]:
         client = self._require_gdb()
-        gdb_type = 1 if bp_type == "hw" else 0
+        gdb_type = 0 if bp_type == "sw" else 1
         try:
             await client.set_breakpoint(gdb_type, address)
             return {"address": address, "bp_type": bp_type}
@@ -701,14 +730,27 @@ class JLinkBackend(Backend):
 
     async def clear_breakpoint(self, address: int) -> dict[str, Any]:
         client = self._require_gdb()
-        # Try hardware first, then software
-        for gdb_type in (1, 0):
+        # Try software first, then hardware
+        for gdb_type in (0, 1):
             try:
                 await client.clear_breakpoint(gdb_type, address)
                 return {"address": address}
             except GdbProtocolError:
                 continue
+        # Fallback: J-Link monitor command to clear all breakpoints
+        try:
+            await client.monitor_command("clrbp")
+            return {"address": address}
+        except Exception:
+            pass
         raise ConnectionError(f"Failed to clear breakpoint at 0x{address:08x}")
+
+    async def clear_all_breakpoints(self) -> None:
+        client = self._require_gdb()
+        try:
+            await client.monitor_command("clrbp")
+        except (GdbConnectionError, GdbProtocolError, GdbTimeoutError) as exc:
+            raise ConnectionError(str(exc)) from exc
 
     async def list_breakpoints(self) -> list[dict[str, Any]]:
         # GDB RSP doesn't have a "list breakpoints" command — this is tracked
@@ -777,22 +819,38 @@ class JLinkBackend(Backend):
         )
         combined = stdout + "\n" + stderr
         lower = combined.lower()
-        err_msg = _check_error(stdout, stderr)
-        if err_msg:
-            raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
-        # Verify positive confirmation of flash success
-        if "o.k." not in lower and "flash download" not in lower and "programmed" not in lower:
+        flash_ok = "o.k." in lower or "flash download" in lower or "programmed" in lower
+        if not flash_ok:
+            # No positive confirmation — check for specific error
+            err_msg = _check_error(stdout, stderr)
+            if err_msg:
+                raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
             raise ConnectionError(f"Flash did not complete successfully.\n\n[JLink output]\n{stdout.strip()}")
 
-        # 3. Reset + go via GDB (if requested).  We do this here rather
-        #    than in JLinkExe because the GDB session owns the target state.
-        if reset_after and self._gdb_client is not None:
+        # 3. Resync GDB after flash.  JLinkExe may have disrupted the GDB
+        #    connection.  Try to use the existing connection first; if it's
+        #    broken, reconnect to the still-running GDBServer.
+        if self._gdb_client is not None and self._gdb_port is not None:
             try:
                 await self._gdb_client.monitor_command("reset")
-                await self._gdb_client.continue_execution()
-                self._target_running = True
+                if reset_after:
+                    await self._gdb_client.continue_execution()
+                    self._target_running = True
             except Exception:
-                pass  # best-effort — flash already succeeded
+                # GDB connection broken by flash — reconnect
+                await self._close_gdb_client()
+                try:
+                    self._gdb_client = GdbClient("127.0.0.1", self._gdb_port)
+                    await self._gdb_client.connect(timeout=5.0)
+                    self._target_running = False
+                    if reset_after:
+                        try:
+                            await self._gdb_client.continue_execution()
+                            self._target_running = True
+                        except Exception:
+                            pass
+                except Exception:
+                    pass  # best-effort — flash already succeeded
 
         return {
             "file": str(resolved),

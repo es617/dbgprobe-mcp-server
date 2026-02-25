@@ -128,13 +128,17 @@ class Backend(ABC):
         """Query target state (running/halted, PC, stop reason)."""
         raise NotImplementedError("status() not supported by this backend")
 
-    async def set_breakpoint(self, address: int, bp_type: str = "hw") -> dict[str, Any]:
-        """Set a hardware or software breakpoint at *address*."""
+    async def set_breakpoint(self, address: int, bp_type: str = "sw") -> dict[str, Any]:
+        """Set a software or hardware breakpoint at *address*."""
         raise NotImplementedError("set_breakpoint() not supported by this backend")
 
     async def clear_breakpoint(self, address: int) -> dict[str, Any]:
         """Clear a breakpoint at *address*."""
         raise NotImplementedError("clear_breakpoint() not supported by this backend")
+
+    async def clear_all_breakpoints(self) -> None:
+        """Clear all breakpoints on the target."""
+        raise NotImplementedError("clear_all_breakpoints() not supported by this backend")
 
     async def list_breakpoints(self) -> list[dict[str, Any]]:
         """List active breakpoints."""

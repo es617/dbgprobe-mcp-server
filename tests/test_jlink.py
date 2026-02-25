@@ -246,6 +246,7 @@ def _make_mock_gdb_client(**overrides) -> MagicMock:
     mock.set_breakpoint = AsyncMock()
     mock.clear_breakpoint = AsyncMock()
     mock.monitor_command = AsyncMock(return_value="OK")
+    mock.read_register = AsyncMock(return_value=0x0800_0000)
     mock.read_registers = AsyncMock(return_value=b"\x00" * 64)
     mock.wait_stop = AsyncMock(return_value=StopReply(signal=5, reason="halted", registers={15: 0x0800_0400}))
     for key, val in overrides.items():
@@ -405,13 +406,15 @@ class TestJLinkBackendReset:
         backend = _make_connected_backend()
         result = await backend.reset("soft")
         assert result["mode"] == "soft"
-        assert backend._target_running is True
+        assert result["state"] == "halted"
         backend._gdb_client.monitor_command.assert_awaited_once_with("reset")
+        backend._gdb_client.query_status.assert_awaited()
 
     async def test_reset_halt(self):
         backend = _make_connected_backend()
         result = await backend.reset("halt")
         assert result["mode"] == "halt"
+        assert result["state"] == "halted"
         assert backend._target_running is False
         calls = backend._gdb_client.monitor_command.call_args_list
         assert calls[0][0][0] == "reset"
@@ -421,7 +424,9 @@ class TestJLinkBackendReset:
         backend = _make_connected_backend()
         result = await backend.reset("hard")
         assert result["mode"] == "hard"
+        assert result["state"] == "halted"
         backend._gdb_client.monitor_command.assert_awaited_once_with("reset 2")
+        backend._gdb_client.query_status.assert_awaited()
 
 
 class TestJLinkBackendMemory:
@@ -442,10 +447,10 @@ class TestJLinkBackendMemory:
 class TestJLinkBackendBreakpoints:
     async def test_set_breakpoint_hw(self):
         backend = _make_connected_backend()
-        result = await backend.set_breakpoint(0x0800_0100, "hw")
+        result = await backend.set_breakpoint(0x0800_0100, "sw")
         assert result["address"] == 0x0800_0100
-        assert result["bp_type"] == "hw"
-        backend._gdb_client.set_breakpoint.assert_awaited_once_with(1, 0x0800_0100)
+        assert result["bp_type"] == "sw"
+        backend._gdb_client.set_breakpoint.assert_awaited_once_with(0, 0x0800_0100)
 
     async def test_set_breakpoint_sw(self):
         backend = _make_connected_backend()
@@ -458,9 +463,18 @@ class TestJLinkBackendBreakpoints:
         result = await backend.clear_breakpoint(0x0800_0100)
         assert result["address"] == 0x0800_0100
 
+    async def test_clear_breakpoint_fallback_clrbp(self):
+        """When z command fails, falls back to monitor clrbp."""
+        backend = _make_connected_backend()
+        backend._gdb_client.clear_breakpoint = AsyncMock(side_effect=GdbProtocolError("nope"))
+        result = await backend.clear_breakpoint(0x0800_0100)
+        assert result["address"] == 0x0800_0100
+        backend._gdb_client.monitor_command.assert_awaited_with("clrbp")
+
     async def test_clear_breakpoint_failure(self):
         backend = _make_connected_backend()
         backend._gdb_client.clear_breakpoint = AsyncMock(side_effect=GdbProtocolError("nope"))
+        backend._gdb_client.monitor_command = AsyncMock(side_effect=GdbProtocolError("nope"))
         with pytest.raises(ConnectionError, match="Failed to clear"):
             await backend.clear_breakpoint(0x0800_0100)
 
@@ -484,7 +498,8 @@ class TestJLinkBackendFlash:
             assert result["verified"] is True
             assert result["reset"] is True
             assert result["breakpoints_cleared"] is True
-            # GDBServer stays running — no teardown/reconnect needed
+            # GDBServer stays running — no teardown/reconnect needed.
+            # Post-flash: monitor reset + continue
             backend._gdb_client.monitor_command.assert_awaited()
             backend._gdb_client.continue_execution.assert_awaited()
 

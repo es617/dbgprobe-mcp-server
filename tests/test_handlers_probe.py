@@ -49,7 +49,7 @@ class MockBackend(Backend):
         self.disconnected = True
 
     async def reset(self, mode):
-        return {"mode": mode}
+        return {"mode": mode, "state": "halted"}
 
     async def halt(self):
         return {}
@@ -75,11 +75,14 @@ class MockBackend(Backend):
     async def status(self):
         return {"state": "halted", "pc": 0x0800_0200, "reason": "halted", "signal": 5}
 
-    async def set_breakpoint(self, address, bp_type="hw"):
+    async def set_breakpoint(self, address, bp_type="sw"):
         return {"address": address, "bp_type": bp_type}
 
     async def clear_breakpoint(self, address):
         return {"address": address}
+
+    async def clear_all_breakpoints(self):
+        pass
 
     async def list_breakpoints(self):
         return []
@@ -304,6 +307,15 @@ class TestReset:
         assert result["ok"] is False
         assert result["error"]["code"] == "invalid_params"
 
+    async def test_restores_breakpoints(self):
+        state = ProbeState()
+        sid, session = _make_session(state)
+        session.breakpoints[0x0800_0100] = Breakpoint(address=0x0800_0100, bp_type="hw")
+        session.breakpoints[0x0800_0200] = Breakpoint(address=0x0800_0200, bp_type="sw")
+        result = await handle_reset(state, {"session_id": sid, "mode": "hard"})
+        assert result["ok"] is True
+        assert result["breakpoints_restored"] == 2
+
 
 class TestHalt:
     async def test_success(self):
@@ -319,6 +331,59 @@ class TestGo:
         sid, _ = _make_session(state)
         result = await handle_go(state, {"session_id": sid})
         assert result["ok"] is True
+
+    async def test_removes_breakpoint_at_pc_before_continue(self):
+        """Go removes breakpoint at current PC, continues, re-inserts."""
+        state = ProbeState()
+        sid, session = _make_session(state)
+        # Set up: breakpoint at the address status() returns as PC (0x0800_0200)
+        session.breakpoints[0x0800_0200] = Breakpoint(address=0x0800_0200, bp_type="sw")
+        calls = []
+        original_clear = session.backend.clear_breakpoint
+        original_set = session.backend.set_breakpoint
+        original_go = session.backend.go
+
+        async def track_clear(address):
+            calls.append(("clear", address))
+            return await original_clear(address)
+
+        async def track_set(address, bp_type="sw"):
+            calls.append(("set", address, bp_type))
+            return await original_set(address, bp_type)
+
+        async def track_go():
+            calls.append(("go",))
+            return await original_go()
+
+        session.backend.clear_breakpoint = track_clear
+        session.backend.set_breakpoint = track_set
+        session.backend.go = track_go
+
+        result = await handle_go(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert calls == [
+            ("clear", 0x0800_0200),
+            ("go",),
+            ("set", 0x0800_0200, "sw"),
+        ]
+
+    async def test_no_dance_when_pc_not_at_breakpoint(self):
+        """Go sends plain continue when PC is not at a breakpoint."""
+        state = ProbeState()
+        sid, session = _make_session(state)
+        # Breakpoint at different address than PC (0x0800_0200)
+        session.breakpoints[0x0800_0100] = Breakpoint(address=0x0800_0100, bp_type="sw")
+        calls = []
+        original_go = session.backend.go
+
+        async def track_go():
+            calls.append("go")
+            return await original_go()
+
+        session.backend.go = track_go
+        result = await handle_go(state, {"session_id": sid})
+        assert result["ok"] is True
+        assert calls == ["go"]
 
 
 class TestFlash:
@@ -495,9 +560,9 @@ class TestBreakpointSet:
         result = await handle_breakpoint_set(state, {"session_id": sid, "address": 0x0800_0100})
         assert result["ok"] is True
         assert result["address"] == 0x0800_0100
-        assert result["bp_type"] == "hw"
+        assert result["bp_type"] == "sw"
         assert 0x0800_0100 in session.breakpoints
-        assert session.breakpoints[0x0800_0100].bp_type == "hw"
+        assert session.breakpoints[0x0800_0100].bp_type == "sw"
 
     async def test_software_breakpoint(self):
         state = ProbeState()
