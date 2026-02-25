@@ -631,8 +631,23 @@ async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
         if session.breakpoints:
             session.breakpoints.clear()
 
-        # ELF auto-reload: if an ELF is attached, re-parse from same path.
-        if session.elf is not None:
+        # ELF handling after flash:
+        # - If flashing an .elf, use it as the ELF source (auto-attach or update).
+        # - Otherwise, re-parse the previously attached ELF from the same path.
+        flashed_is_elf = path.lower().endswith(".elf")
+        had_elf = session.elf is not None
+
+        if flashed_is_elf:
+            try:
+                session.elf = parse_elf(path)
+                result["elf_reloaded" if had_elf else "elf_attached"] = True
+                result["elf_path"] = path
+            except Exception:
+                logger.debug("ELF auto-attach failed for %s", path)
+                if session.elf is not None:
+                    session.elf = None
+                    result["elf_detached"] = True
+        elif session.elf is not None:
             elf_path = session.elf.path
             try:
                 session.elf = parse_elf(elf_path)
