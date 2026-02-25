@@ -268,6 +268,7 @@ def _make_connected_backend(**gdb_overrides) -> JLinkBackend:
     )
     backend._gdb_client = _make_mock_gdb_client(**gdb_overrides)
     backend._gdb_port = 2331
+    backend._gdbserver_proc = MagicMock()  # simulate running GDB server
     backend._target_running = False
     return backend
 
@@ -490,18 +491,23 @@ class TestJLinkBackendFlash:
         fw = tmp_path / "firmware.hex"
         fw.write_text(":00000001FF\n")
 
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            AsyncMock(return_value=("Programmed OK\n", "", 0)),
+        with (
+            patch(
+                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
+                AsyncMock(return_value=("Programmed OK\n", "", 0)),
+            ),
+            patch.object(backend, "_stop_gdbserver", AsyncMock()) as mock_stop,
+            patch.object(backend, "_start_gdbserver", AsyncMock()) as mock_start,
+            patch.object(backend, "_close_gdb_client", AsyncMock()) as mock_close,
         ):
             result = await backend.flash(str(fw))
             assert result["verified"] is True
             assert result["reset"] is True
             assert result["breakpoints_cleared"] is True
-            # GDBServer stays running — no teardown/reconnect needed.
-            # Post-flash: monitor reset + continue
-            backend._gdb_client.monitor_command.assert_awaited()
-            backend._gdb_client.continue_execution.assert_awaited()
+            # GDB teardown before flash, restart after
+            mock_close.assert_awaited_once()
+            mock_stop.assert_awaited_once()
+            mock_start.assert_awaited_once()
 
     async def test_flash_bin_requires_addr(self, tmp_path):
         backend = _make_connected_backend()
@@ -516,9 +522,14 @@ class TestJLinkBackendFlash:
         fw = tmp_path / "firmware.bin"
         fw.write_bytes(b"\x00" * 16)
 
-        with patch(
-            "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
-            AsyncMock(return_value=("Programmed OK\n", "", 0)),
+        with (
+            patch(
+                "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
+                AsyncMock(return_value=("Programmed OK\n", "", 0)),
+            ),
+            patch.object(backend, "_stop_gdbserver", AsyncMock()),
+            patch.object(backend, "_start_gdbserver", AsyncMock()),
+            patch.object(backend, "_close_gdb_client", AsyncMock()),
         ):
             result = await backend.flash(str(fw), addr=0x0800_0000)
             assert result["verified"] is True

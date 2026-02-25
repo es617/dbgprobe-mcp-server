@@ -341,7 +341,8 @@ class GdbClient:
         offset = 0
         while remaining > 0:
             chunk = min(remaining, _MEM_READ_CHUNK)
-            resp = await self.send_packet(f"m{addr + offset:x},{chunk:x}")
+            pkt = f"m{addr + offset:x},{chunk:x}"
+            resp = await self.send_packet(pkt)
             if resp.startswith("E"):
                 raise GdbProtocolError(f"Memory read error at 0x{addr + offset:08x}: {resp}")
             result.extend(bytes.fromhex(resp))

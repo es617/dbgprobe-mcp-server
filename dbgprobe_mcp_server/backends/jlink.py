@@ -771,12 +771,13 @@ class JLinkBackend(Backend):
         reset_after: bool = True,
     ) -> dict[str, Any]:
         self._require_config()
+        if self._exe is None:
+            self._resolve_paths()
         resolved = Path(path).resolve()
         if not resolved.is_file():
             raise FileNotFoundError(f"Firmware file not found: {path}")
 
-        # 1. Halt target if running (safety: JLinkExe halts internally,
-        #    but explicit halt ensures consistent state across targets)
+        # 1. Halt target if running
         if self._target_running and self._gdb_client and self._gdb_client.connected:
             try:
                 await self._gdb_client.halt()
@@ -784,8 +785,12 @@ class JLinkBackend(Backend):
                 pass
             self._target_running = False
 
-        # 2. Flash via JLinkExe one-shot (GDBServer stays running —
-        #    SEGGER tools support concurrent probe access)
+        # 2. Tear down GDB connection — JLinkExe needs exclusive USB access
+        had_gdb = self._gdbserver_proc is not None
+        await self._close_gdb_client()
+        await self._stop_gdbserver()
+
+        # 3. Flash via JLinkExe one-shot
         cfg = self._require_config()
         ext = resolved.suffix.lower()
         commands: list[str] = []
@@ -808,6 +813,17 @@ class JLinkBackend(Backend):
             elif addr is not None:
                 commands.append(f"verifybin {resolved},{addr:#x}")
 
+        # If no GDB server will be restarted after flash, handle reset+go
+        # in JLinkExe directly.  The "r" command halts the core (via
+        # DEMCR.VC_CORERESET), so we must "g" (go) to resume execution
+        # before quitting — otherwise the halted core leaves the debug
+        # interface locked, preventing subsequent GDB server connections.
+        # For session-based flash, GDB server restarts afterward and handles
+        # reset+continue there, so skip this.
+        if reset_after and not had_gdb:
+            commands.append("r")
+            commands.append("g")
+
         commands.append("q")
 
         stdout, stderr, _rc = await _run_jlink_script(
@@ -828,42 +844,48 @@ class JLinkBackend(Backend):
                 raise ConnectionError(f"{err_msg}\n\n[JLink output]\n{stdout.strip()}")
             raise ConnectionError(f"Flash did not complete successfully.\n\n[JLink output]\n{stdout.strip()}")
 
-        # 3. Resync GDB after flash.  JLinkExe may have disrupted the GDB
-        #    connection.  Try to use the existing connection first; if it's
-        #    broken, reconnect to the still-running GDBServer.
-        if self._gdb_client is not None and self._gdb_port is not None:
-            try:
-                await self._gdb_client.monitor_command("reset")
-                if reset_after:
+        # 4. Restart GDBServer + reconnect (only if we had one before)
+        if had_gdb and self._config is not None:
+            await self._start_gdbserver(self._config)
+            if reset_after and self._gdb_client is not None:
+                try:
+                    await self._gdb_client.monitor_command("reset")
                     await self._gdb_client.continue_execution()
                     self._target_running = True
-            except Exception:
-                # GDB connection broken by flash — reconnect
-                await self._close_gdb_client()
-                try:
-                    self._gdb_client = GdbClient("127.0.0.1", self._gdb_port)
-                    await self._gdb_client.connect(timeout=5.0)
-                    self._target_running = False
-                    if reset_after:
-                        try:
-                            await self._gdb_client.continue_execution()
-                            self._target_running = True
-                        except Exception:
-                            pass
                 except Exception:
                     pass  # best-effort — flash already succeeded
 
-        return {
+        result: dict[str, Any] = {
             "file": str(resolved),
             "verified": verify,
             "reset": reset_after,
             "breakpoints_cleared": True,
         }
+        # Include JLinkExe output for diagnostics (warnings, APPROTECT, etc.)
+        if stdout.strip():
+            result["jlink_output"] = stdout.strip()
+        return result
 
     # ------------------------------------------------------------------
-    # erase — JLinkExe one-shot (works with or without active session;
-    #          SEGGER tools support concurrent probe access)
+    # erase — via GDB monitor command (session) or JLinkExe (session-less)
     # ------------------------------------------------------------------
+
+    async def erase_via_gdb(
+        self,
+        start_addr: int | None = None,
+        end_addr: int | None = None,
+    ) -> dict[str, Any]:
+        """Erase flash through the active GDB session (no USB contention)."""
+        client = self._require_gdb()
+
+        if start_addr is not None and end_addr is not None:
+            cmd = f"flash erase {start_addr:#x} {end_addr:#x}"
+        else:
+            cmd = "flash erase"
+
+        output = await client.monitor_command(cmd)
+
+        return {"monitor_output": output}
 
     async def erase(
         self,
@@ -871,6 +893,7 @@ class JLinkBackend(Backend):
         start_addr: int | None = None,
         end_addr: int | None = None,
     ) -> dict[str, Any]:
+        """Erase flash via JLinkExe one-shot (session-less)."""
         paths = self._resolve_paths()
         if self._exe is None:
             raise FileNotFoundError(

@@ -51,6 +51,12 @@ async def handle_connections_list(state: ProbeState, _args: dict[str, Any]) -> d
                 "spec_id": session.spec.get("spec_id"),
                 "name": session.spec.get("meta", {}).get("name"),
             }
+        if session.elf is not None:
+            entry["elf"] = {
+                "path": session.elf.path,
+                "symbol_count": sum(len(v) for v in session.elf.symbols.values()),
+                "function_count": len(session.elf._sorted_functions),
+            }
         items.append(entry)
     return _ok(
         message=f"{len(items)} session(s).",

@@ -18,6 +18,7 @@ from dbgprobe_mcp_server import (
     backends as _backends,  # noqa: F401 — triggers backend registration
 )
 from dbgprobe_mcp_server import (
+    handlers_elf,
     handlers_introspection,
     handlers_plugin,
     handlers_probe,
@@ -59,6 +60,7 @@ def build_server() -> tuple[Server, ProbeState]:
         handlers_probe.TOOLS
         + handlers_introspection.TOOLS
         + handlers_spec.TOOLS
+        + handlers_elf.TOOLS
         + handlers_trace.TOOLS
         + handlers_plugin.TOOLS
     )
@@ -66,6 +68,7 @@ def build_server() -> tuple[Server, ProbeState]:
         **handlers_probe.HANDLERS,
         **handlers_introspection.HANDLERS,
         **handlers_spec.HANDLERS,
+        **handlers_elf.HANDLERS,
         **handlers_trace.HANDLERS,
     }
 
