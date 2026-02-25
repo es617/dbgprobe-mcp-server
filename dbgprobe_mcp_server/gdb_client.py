@@ -8,17 +8,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("dbgprobe_mcp_server")
 
-_TRACE_FILE = "/tmp/gdb_trace.log"
+_GDB_TRACE = os.environ.get("DBGPROBE_GDB_TRACE", "").lower() in ("1", "true", "yes")
+_GDB_TRACE_FILE = os.environ.get("DBGPROBE_GDB_TRACE_FILE", "/tmp/gdb_trace.log")
 
 
 def _trace(msg: str) -> None:
+    if not _GDB_TRACE:
+        return
     import time
 
-    with open(_TRACE_FILE, "a") as f:
+    with open(_GDB_TRACE_FILE, "a") as f:
         f.write(f"{time.time():.3f} {msg}\n")
 
 

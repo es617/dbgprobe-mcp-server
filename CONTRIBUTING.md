@@ -101,6 +101,12 @@ flash(path, reset_after=True)
 
 GDB RSP has no "list breakpoints" command — the protocol only supports set (`Z`) and clear (`z`). Breakpoints are tracked in `session.breakpoints` (a dict of address → Breakpoint). The handler layer is the authoritative source; the backend just forwards to the GDB stub. Flash clears all tracked breakpoints since the firmware changed.
 
+Software breakpoints (`Z0`) are the default — this matches what GDB uses. JLinkGDBServer handles flash patching internally, so `Z0` works on both flash and RAM. Hardware breakpoints (`Z1`) are available via `bp_type: "hw"` but are limited by FPB slots (typically 4-6 on Cortex-M).
+
+### Continue from breakpoint (remove/re-insert dance)
+
+When the target is halted at an address with an active breakpoint, `go` must remove the breakpoint before sending `c`, then re-insert it after. Without this, the breakpoint re-triggers immediately. This is standard GDB behavior — confirmed by sniffing traffic with `tools/gdb_proxy.py`.
+
 ## How tools are registered
 
 Each `handlers_*.py` file exports:

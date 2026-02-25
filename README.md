@@ -153,6 +153,8 @@ claude mcp add dbgprobe -e DBGPROBE_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 | `DBGPROBE_JLINK_DEVICE` | *(none)* | Default target device string (e.g. `nRF52840_xxAA`). Can be overridden per-session. |
 | `DBGPROBE_INTERFACE` | `SWD` | Debug interface: `SWD` or `JTAG`. |
 | `DBGPROBE_SPEED_KHZ` | `4000` | Interface clock speed in kHz. |
+| `DBGPROBE_GDB_TRACE` | disabled | Log all GDB RSP packets to file. Set to `1`, `true`, or `yes` to enable. |
+| `DBGPROBE_GDB_TRACE_FILE` | `/tmp/gdb_trace.log` | Path for GDB RSP trace log (only when `GDB_TRACE` is on). |
 
 ---
 

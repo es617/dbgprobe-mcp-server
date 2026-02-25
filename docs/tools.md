@@ -35,7 +35,7 @@ Returns:
 
 ### dbgprobe.connect
 
-Establish a debug probe session. Returns a `session_id` and the resolved configuration (backend, executable paths, defaults applied).
+Establish a debug probe session. Returns a `session_id` and the resolved configuration (backend, executable paths, defaults applied). The target is halted after connecting — this is inherent to the debug probe connection. Use `dbgprobe.go` to resume execution if needed.
 
 ```json
 {
@@ -317,19 +317,19 @@ Returns (running):
 
 ### dbgprobe.breakpoint.set
 
-Set a hardware or software breakpoint at a target address.
+Set a breakpoint at a target address.
 
 ```json
 {
   "session_id": "p1a2b3c4",
   "address": 134218000,
-  "bp_type": "hw"
+  "bp_type": "sw"
 }
 ```
 
-`bp_type` is optional (default: `hw`). Options:
-- `hw` — hardware breakpoint (limited in number, works on flash)
-- `sw` — software breakpoint (modifies memory, RAM only)
+`bp_type` is optional (default: `sw`). Options:
+- `sw` — software breakpoint (default). Handled by the debug probe, works on both flash and RAM.
+- `hw` — hardware breakpoint. Uses the CPU's FPB registers (limited to 4-6 slots on Cortex-M).
 
 Returns:
 
@@ -338,7 +338,7 @@ Returns:
   "ok": true,
   "session_id": "p1a2b3c4",
   "address": 134218000,
-  "bp_type": "hw"
+  "bp_type": "sw"
 }
 ```
 
