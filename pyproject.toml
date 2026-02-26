@@ -55,9 +55,10 @@ target-version = "py311"
 line-length = 110
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "UP", "B", "S", "SIM", "RUF"]
 ignore = [
     "E501",    # line length handled by formatter
+    "S110",    # try-except-pass is intentional for best-effort probe cleanup
     "SIM105",  # contextlib.suppress is less readable for async cleanup
     "RUF001",  # en-dash in strings is intentional
     "RUF002",  # en-dash in docstrings is intentional
@@ -66,7 +67,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["RUF059"]  # unused unpacked vars in tests are fine
+"tests/*" = ["S101", "S108", "RUF059"]  # asserts, /tmp paths, unused unpacked vars are fine in tests
+"tools/*" = ["S108", "S603", "S607"]  # /tmp paths, subprocess calls in CLI/dev tools
+"examples/*" = ["S105", "S311", "S603", "S607"]  # demo devices: fake passwords, pseudo-random sensor data, subprocess
 
 [tool.ruff.lint.isort]
 known-first-party = ["dbgprobe_mcp_server"]
