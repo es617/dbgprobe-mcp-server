@@ -158,6 +158,14 @@ class Backend(ABC):
         """Erase flash through an active debug session."""
         raise NotImplementedError("erase_via_gdb() not supported by this backend")
 
+    async def monitor(self, command: str) -> str:
+        """Send a raw monitor command to the debug probe and return the response.
+
+        This is the low-level escape hatch for probe-specific commands
+        (e.g. JLink ``exec SetRTTAddr``, ``ReadAP``, ``WriteAP``).
+        """
+        raise NotImplementedError("monitor() not supported by this backend")
+
     # -- Optional RTT methods ------------------------------------------------
     # Backends that expose RTT (Real-Time Transfer) override these.
 

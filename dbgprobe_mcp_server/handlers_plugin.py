@@ -28,15 +28,46 @@ from mcp.types import Tool
 from dbgprobe_mcp_server.helpers import _ok, _err  # _ok(key=val) / _err("code", "message")
 from dbgprobe_mcp_server.state import ProbeState
 
-# Import core handlers to interact with the debug probe.
-# Each takes (state: ProbeState, args: dict) and returns a dict.
-from dbgprobe_mcp_server.handlers_probe import (
-    handle_mem_read,   # read memory: args session_id, address, length
-    handle_mem_write,  # write memory: args session_id, address, data (hex), length
-)
+# ---------------------------------------------------------------------------
+# Backend access
+# ---------------------------------------------------------------------------
+# Plugins access the debug probe through the backend object:
+#
+#   session = state.get_session(args["session_id"])
+#   backend = session.backend
+#
+# Available backend methods (all async):
+#
+#   Memory:
+#     await backend.mem_read(address, length)   -> bytes
+#     await backend.mem_write(address, data)     data: bytes
+#
+#   Execution:
+#     await backend.halt()    -> {{"pc": int, "reason": str}}
+#     await backend.go()      -> {{"status": str}}
+#     await backend.step()    -> {{"pc": int, "reason": str}}
+#     await backend.reset()   -> {{"status": str}}
+#     await backend.status()  -> {{"state": str, "pc": int, ...}}
+#
+#   Breakpoints:
+#     await backend.set_breakpoint(address)
+#     await backend.clear_breakpoint(address)
+#
+#   Monitor (raw probe commands — JLink: "exec ...", "ReadAP", etc.):
+#     await backend.monitor("exec SetRTTAddr 0x20000000")  -> str
+#
+#   RTT:
+#     await backend.rtt_start(address=None)
+#     await backend.rtt_read(timeout=0.1)  -> bytes
+#     await backend.rtt_write(data)        -> int (bytes written)
+#     await backend.rtt_stop()
+#     backend.rtt_active                   -> bool
+#
+# You can also call handler functions directly:
+#   from dbgprobe_mcp_server.handlers_probe import handle_mem_read
+#   resp = await handle_mem_read(state, {{"session_id": sid, "address": "0x20000000", "length": 4}})
 
 # Optional metadata — helps the agent match this plugin to a device.
-# All fields are optional. Use what makes sense for your device.
 META = {{
     "description": "{name} plugin",
     # "device_name_contains": "{name}",
@@ -59,19 +90,19 @@ TOOLS = [
 
 async def handle_example(state: ProbeState, args: dict) -> dict:
     session_id = args["session_id"]
-    # Read memory using handle_mem_read:
-    #   resp = await handle_mem_read(state, {{
-    #       "session_id": session_id,
-    #       "address": "0x50000504",
-    #       "length": 4,
-    #   }})
+    session = state.get_session(session_id)
+    backend = session.backend
+
+    # Examples:
     #
-    # Write memory using handle_mem_write:
-    #   resp = await handle_mem_write(state, {{
-    #       "session_id": session_id,
-    #       "address": "0x50000504",
-    #       "data": "01000000",
-    #   }})
+    # Read 4 bytes of memory:
+    #   data = await backend.mem_read(0x50000504, 4)
+    #
+    # Write memory:
+    #   await backend.mem_write(0x50000504, b"\\x01\\x00\\x00\\x00")
+    #
+    # Send a raw monitor command (JLink-specific):
+    #   resp = await backend.monitor("exec SetRTTAddr 0x20000000")
     #
     # Return errors with: return _err("error_code", "Human-readable message")
     # Return success with: return _ok(key1=val1, key2=val2)
