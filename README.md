@@ -122,7 +122,7 @@ claude mcp add dbgprobe \
   -- dbgprobe_mcp
 
 # Debug logging
-claude mcp add dbgprobe -e DBGPROBE_LOG_LEVEL=DEBUG -- dbgprobe_mcp
+claude mcp add dbgprobe -e DBGPROBE_MCP_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 ```
 
 > MCP is a protocol. Claude Code is one MCP client; other agent runtimes can also connect to this server.
@@ -134,7 +134,7 @@ claude mcp add dbgprobe -e DBGPROBE_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 | Variable | Default | Description |
 |---|---|---|
 | `DBGPROBE_BACKEND` | `jlink` | Debug probe backend. Future: `openocd`, `pyocd`. |
-| `DBGPROBE_LOG_LEVEL` | `WARNING` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Logs go to stderr. |
+| `DBGPROBE_MCP_LOG_LEVEL` | `WARNING` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Logs go to stderr. |
 | `DBGPROBE_MCP_TRACE` | enabled | JSONL tracing of every tool call. Set to `0`, `false`, or `no` to disable. |
 | `DBGPROBE_MCP_TRACE_PAYLOADS` | disabled | Include memory data payloads in traced args (stripped by default). |
 | `DBGPROBE_MCP_TRACE_MAX_BYTES` | `16384` | Max payload chars before truncation (only when `TRACE_PAYLOADS` is on). |
