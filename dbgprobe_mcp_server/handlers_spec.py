@@ -73,10 +73,10 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "connection_id": {"type": "string"},
+                "session_id": {"type": "string"},
                 "spec_id": {"type": "string", "description": "The spec_id from dbgprobe.spec.register."},
             },
-            "required": ["connection_id", "spec_id"],
+            "required": ["session_id", "spec_id"],
         },
     ),
     Tool(
@@ -85,9 +85,9 @@ TOOLS: list[Tool] = [
         inputSchema={
             "type": "object",
             "properties": {
-                "connection_id": {"type": "string"},
+                "session_id": {"type": "string"},
             },
-            "required": ["connection_id"],
+            "required": ["session_id"],
         },
     ),
     Tool(
@@ -152,16 +152,15 @@ async def handle_spec_list(_state: ProbeState, _args: dict[str, Any]) -> dict[st
 
 
 async def handle_spec_attach(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
-    cid = args["connection_id"]
+    session = state.get_session(args["session_id"])
     spec_id = args["spec_id"]
-    entry = state.get_connection(cid)
     try:
         spec_data = specs.read_spec(spec_id)
     except KeyError as exc:
         return _err("not_found", str(exc))
     except FileNotFoundError as exc:
         return _err("not_found", str(exc))
-    entry.spec = {
+    session.spec = {
         "spec_id": spec_data["spec_id"],
         "path": spec_data["path"],
         "meta": spec_data["meta"],
@@ -173,11 +172,10 @@ async def handle_spec_attach(state: ProbeState, args: dict[str, Any]) -> dict[st
 
 
 async def handle_spec_get(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
-    cid = args["connection_id"]
-    entry = state.get_connection(cid)
-    if entry.spec is None:
+    session = state.get_session(args["session_id"])
+    if session.spec is None:
         return _ok(spec=None)
-    return _ok(spec=entry.spec)
+    return _ok(spec=session.spec)
 
 
 async def handle_spec_read(_state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:

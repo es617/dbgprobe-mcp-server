@@ -73,6 +73,15 @@ class TestElfAttach:
         assert result["ok"] is False
         assert result["error"]["code"] == "parse_error"
 
+    async def test_bad_extension(self, tmp_path):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        bad = tmp_path / "data.txt"
+        bad.write_text("not an elf")
+        result = await handle_elf_attach(state, {"session_id": sid, "path": str(bad)})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_path"
+
     async def test_replace_existing(self):
         state = ProbeState()
         sid, session = _make_session(state)
@@ -84,7 +93,7 @@ class TestElfAttach:
 
     async def test_unknown_session(self):
         state = ProbeState()
-        with pytest.raises(KeyError, match="Unknown connection_id"):
+        with pytest.raises(KeyError, match="Unknown session_id"):
             await handle_elf_attach(state, {"session_id": "nope", "path": MINIMAL_ELF})
 
 

@@ -57,7 +57,7 @@ class MockBackend(Backend):
     async def go(self):
         return {}
 
-    async def flash(self, path, addr=None, verify=True, reset_after=True):
+    async def flash(self, path, addr=None, verify=True, reset_after=True, config=None):
         return {"file": path, "verified": verify, "reset": reset_after, "breakpoints_cleared": True}
 
     async def mem_read(self, address, length):
@@ -290,7 +290,7 @@ class TestErase:
 
     async def test_session_erase_unknown_session(self):
         state = ProbeState()
-        with pytest.raises(KeyError, match="Unknown connection_id"):
+        with pytest.raises(KeyError, match="Unknown session_id"):
             await handle_erase(state, {"session_id": "nope"})
 
 
@@ -305,7 +305,7 @@ class TestDisconnect:
 
     async def test_unknown_session(self):
         state = ProbeState()
-        with pytest.raises(KeyError, match="Unknown connection_id"):
+        with pytest.raises(KeyError, match="Unknown session_id"):
             await handle_disconnect(state, {"session_id": "nope"})
 
 

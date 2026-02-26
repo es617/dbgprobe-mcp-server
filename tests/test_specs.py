@@ -17,12 +17,12 @@ from dbgprobe_mcp_server.specs import (
     search_spec,
     validate_spec_meta,
 )
-from dbgprobe_mcp_server.state import ProbeConnection, ProbeState
+from dbgprobe_mcp_server.state import DbgProbeSession, ProbeState
 
 
-def _make_conn(cid: str = "c1") -> ProbeConnection:
-    """Create a minimal ProbeConnection for testing."""
-    return ProbeConnection(connection_id=cid)
+def _make_conn(cid: str = "c1") -> DbgProbeSession:
+    """Create a minimal DbgProbeSession for testing."""
+    return DbgProbeSession(connection_id=cid)
 
 
 # ---------------------------------------------------------------------------
@@ -494,12 +494,12 @@ class TestSpecHandlers:
 
         state = ProbeState()
         conn = _make_conn("c1")
-        state.connections["c1"] = conn
+        state.sessions["c1"] = conn
 
         result = await handle_spec_attach(
             state,
             {
-                "connection_id": "c1",
+                "session_id": "c1",
                 "spec_id": entry_data["spec_id"],
             },
         )
@@ -514,28 +514,28 @@ class TestSpecHandlers:
 
         state = ProbeState()
         conn = _make_conn("c1")
-        state.connections["c1"] = conn
+        state.sessions["c1"] = conn
 
         result = await handle_spec_attach(
             state,
             {
-                "connection_id": "c1",
+                "session_id": "c1",
                 "spec_id": "nonexistent",
             },
         )
         assert result["ok"] is False
         assert result["error"]["code"] == "not_found"
 
-    async def test_attach_unknown_connection_id(self, monkeypatch, tmp_path):
+    async def test_attach_unknown_session_id(self, monkeypatch, tmp_path):
         _setup_env(monkeypatch, tmp_path)
         from dbgprobe_mcp_server.handlers_spec import handle_spec_attach
 
         state = ProbeState()
-        with pytest.raises(KeyError, match="Unknown connection_id"):
+        with pytest.raises(KeyError, match="Unknown session_id"):
             await handle_spec_attach(
                 state,
                 {
-                    "connection_id": "nope",
+                    "session_id": "nope",
                     "spec_id": "anything",
                 },
             )
@@ -547,9 +547,9 @@ class TestSpecHandlers:
         state = ProbeState()
         conn = _make_conn("c1")
         conn.spec = {"spec_id": "test123", "path": "/tmp/test.md", "meta": {}}
-        state.connections["c1"] = conn
+        state.sessions["c1"] = conn
 
-        result = await handle_spec_get(state, {"connection_id": "c1"})
+        result = await handle_spec_get(state, {"session_id": "c1"})
         assert result["ok"] is True
         assert result["spec"]["spec_id"] == "test123"
 
@@ -559,9 +559,9 @@ class TestSpecHandlers:
 
         state = ProbeState()
         conn = _make_conn("c1")
-        state.connections["c1"] = conn
+        state.sessions["c1"] = conn
 
-        result = await handle_spec_get(state, {"connection_id": "c1"})
+        result = await handle_spec_get(state, {"session_id": "c1"})
         assert result["ok"] is True
         assert result["spec"] is None
 

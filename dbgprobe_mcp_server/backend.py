@@ -92,8 +92,14 @@ class Backend(ABC):
         addr: int | None = None,
         verify: bool = True,
         reset_after: bool = True,
+        config: ConnectConfig | None = None,
     ) -> dict[str, Any]:
-        """Program a firmware image."""
+        """Program a firmware image.
+
+        *config* is optional — when provided (session-less flash), the
+        backend uses it for tool/probe parameters instead of requiring a
+        prior ``connect()`` call.
+        """
 
     @abstractmethod
     async def mem_read(self, address: int, length: int) -> bytes:
@@ -110,9 +116,9 @@ class Backend(ABC):
         start_addr: int | None = None,
         end_addr: int | None = None,
     ) -> dict[str, Any]:
-        """Erase the target flash via JLinkExe (session-less).
+        """Erase the target flash (session-less).
 
-        With no addresses: full chip erase (unlocks secured devices).
+        With no addresses: full chip erase (may unlock secured devices).
         With *start_addr* and *end_addr*: erase only that address range.
         """
 
@@ -149,7 +155,7 @@ class Backend(ABC):
         start_addr: int | None = None,
         end_addr: int | None = None,
     ) -> dict[str, Any]:
-        """Erase flash through an active GDB session (no USB contention)."""
+        """Erase flash through an active debug session."""
         raise NotImplementedError("erase_via_gdb() not supported by this backend")
 
 

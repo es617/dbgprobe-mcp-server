@@ -80,7 +80,7 @@ class MockBackend(Backend):
     async def go(self):
         return {}
 
-    async def flash(self, path, addr=None, verify=True, reset_after=True):
+    async def flash(self, path, addr=None, verify=True, reset_after=True, config=None):
         return {}
 
     async def mem_read(self, address, length):
@@ -148,6 +148,15 @@ class TestSvdAttach:
         assert result["ok"] is False
         assert result["error"]["code"] == "parse_error"
 
+    async def test_bad_extension(self, tmp_path):
+        state = ProbeState()
+        sid, _, _ = _make_session(state)
+        bad = tmp_path / "data.txt"
+        bad.write_text("not an svd")
+        result = await handle_svd_attach(state, {"session_id": sid, "path": str(bad)})
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_path"
+
     async def test_replace_existing(self):
         state = ProbeState()
         sid, session, _ = _make_session(state)
@@ -157,7 +166,7 @@ class TestSvdAttach:
 
     async def test_unknown_session(self):
         state = ProbeState()
-        with pytest.raises(KeyError, match="Unknown connection_id"):
+        with pytest.raises(KeyError, match="Unknown session_id"):
             await handle_svd_attach(state, {"session_id": "nope", "path": MINIMAL_SVD})
 
 
