@@ -90,7 +90,7 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 
 | Category | Tools |
 |---|---|
-| **Probe** | `dbgprobe.list_probes`, `dbgprobe.connect`, `dbgprobe.erase`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.step`, `dbgprobe.status`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write`, `dbgprobe.breakpoint.set`, `dbgprobe.breakpoint.clear`, `dbgprobe.breakpoint.list` |
+| **Probe** | `dbgprobe.probes.list`, `dbgprobe.connect`, `dbgprobe.erase`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.step`, `dbgprobe.status`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write`, `dbgprobe.breakpoint.set`, `dbgprobe.breakpoint.clear`, `dbgprobe.breakpoint.list` |
 | **Introspection** | `dbgprobe.connections.list` |
 | **ELF** | `dbgprobe.elf.attach`, `dbgprobe.elf.info`, `dbgprobe.elf.lookup`, `dbgprobe.elf.symbols` |
 | **SVD** | `dbgprobe.svd.attach`, `dbgprobe.svd.info`, `dbgprobe.svd.read`, `dbgprobe.svd.write`, `dbgprobe.svd.set_field`, `dbgprobe.svd.update_fields`, `dbgprobe.svd.list_peripherals`, `dbgprobe.svd.list_registers`, `dbgprobe.svd.list_fields`, `dbgprobe.svd.describe` |

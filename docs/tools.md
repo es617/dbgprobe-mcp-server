@@ -8,7 +8,7 @@ All tools return structured JSON:
 
 ## Probe
 
-### dbgprobe.list_probes
+### dbgprobe.probes.list
 
 List attached debug probes. Returns vendor/backend-specific info (serial number, description).
 

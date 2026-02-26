@@ -16,6 +16,7 @@ from dbgprobe_mcp_server.helpers import (
     DBGPROBE_INTERFACE,
     DBGPROBE_JLINK_DEVICE,
     DBGPROBE_SPEED_KHZ,
+    _coerce_bool,
     _err,
     _ok,
     _parse_addr,
@@ -30,7 +31,7 @@ logger = logging.getLogger("dbgprobe_mcp_server")
 
 TOOLS: list[Tool] = [
     Tool(
-        name="dbgprobe.list_probes",
+        name="dbgprobe.probes.list",
         description=(
             "List attached debug probes. Returns vendor/backend-specific info "
             "(serial number, description). For J-Link, enumerates via JLinkExe."
@@ -239,11 +240,11 @@ TOOLS: list[Tool] = [
                     "description": 'Base address for .bin files (e.g. 0x08000000 or "0x8000000"). Not needed for .hex/.elf.',
                 },
                 "verify": {
-                    "type": "boolean",
+                    "type": ["boolean", "string"],
                     "description": "Verify after programming (default: true).",
                 },
                 "reset_after": {
-                    "type": "boolean",
+                    "type": ["boolean", "string"],
                     "description": "Reset and run after programming (default: true).",
                 },
             },
@@ -651,8 +652,8 @@ async def handle_go(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
 async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     path = args["path"]
     addr = _parse_addr(args.get("addr"))
-    verify = args.get("verify", True)
-    reset_after = args.get("reset_after", True)
+    verify = _coerce_bool(args.get("verify", True))
+    reset_after = _coerce_bool(args.get("reset_after", True))
     session_id = args.get("session_id")
 
     # Session-based flash: teardown GDB → JLinkExe → restart GDB
@@ -882,7 +883,7 @@ async def handle_breakpoint_list(state: ProbeState, args: dict[str, Any]) -> dic
 
 
 HANDLERS: dict[str, Any] = {
-    "dbgprobe.list_probes": handle_list_probes,
+    "dbgprobe.probes.list": handle_list_probes,
     "dbgprobe.connect": handle_connect,
     "dbgprobe.erase": handle_erase,
     "dbgprobe.disconnect": handle_disconnect,
