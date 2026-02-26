@@ -776,6 +776,14 @@ class JLinkBackend(Backend):
         return []
 
     # ------------------------------------------------------------------
+    # Monitor — raw GDB monitor commands
+    # ------------------------------------------------------------------
+
+    async def monitor(self, command: str) -> str:
+        client = self._require_gdb()
+        return await client.monitor_command(command)
+
+    # ------------------------------------------------------------------
     # RTT — Real-Time Transfer via JLinkGDBServer telnet port
     # ------------------------------------------------------------------
 

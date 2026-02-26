@@ -13,3 +13,4 @@ coverage.md
 .DS_Store
 .mcpregistry_*
 .dbgprobe_mcp/
+uv.lock

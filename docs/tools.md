@@ -1047,3 +1047,76 @@ Return last N trace events (default 50).
 { "n": 20 }
 ```
 
+---
+
+## Plugins
+
+User plugins live in `.dbgprobe_mcp/plugins/` (single `.py` files or packages with `__init__.py`). Enable with `DBGPROBE_MCP_PLUGINS=all` or `DBGPROBE_MCP_PLUGINS=name1,name2`.
+
+Plugins export `TOOLS` (list of `Tool`), `HANDLERS` (dict of name → async handler), and optional `META` (dict with matching hints). Each handler receives `(state: ProbeState, args: dict)`.
+
+### Backend access
+
+Plugins access the debug probe directly through the backend object:
+
+```python
+session = state.get_session(args["session_id"])
+backend = session.backend
+
+# Memory
+data = await backend.mem_read(0x50000504, 4)           # -> bytes
+await backend.mem_write(0x50000504, b"\x01\x00\x00\x00")
+
+# Execution control
+await backend.halt()
+await backend.go()
+await backend.step()
+await backend.reset()
+await backend.status()
+
+# Breakpoints
+await backend.set_breakpoint(0x08000100)
+await backend.clear_breakpoint(0x08000100)
+
+# Raw monitor commands (probe-specific, e.g. JLink)
+resp = await backend.monitor("exec SetRTTAddr 0x20000000")
+
+# RTT
+await backend.rtt_start()
+data = await backend.rtt_read(timeout=0.5)
+await backend.rtt_write(b"hello\n")
+await backend.rtt_stop()
+```
+
+### dbgprobe.plugin.list
+
+List loaded plugins with tool names and metadata. Also returns whether plugins are enabled.
+
+```json
+{}
+```
+
+### dbgprobe.plugin.template
+
+Return a Python plugin skeleton. Optionally pre-fill with a device name.
+
+```json
+{ "device_name": "nRF52840" }
+```
+
+### dbgprobe.plugin.load
+
+Load a plugin from a file path. Path must be under `.dbgprobe_mcp/plugins/`.
+
+```json
+{ "path": ".dbgprobe_mcp/plugins/my_plugin.py" }
+```
+
+### dbgprobe.plugin.reload
+
+Hot-reload a loaded plugin by name.
+
+```json
+{ "name": "my_plugin" }
+```
+

@@ -95,6 +95,7 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 | **ELF** | `dbgprobe.elf.attach`, `dbgprobe.elf.info`, `dbgprobe.elf.lookup`, `dbgprobe.elf.symbols` |
 | **SVD** | `dbgprobe.svd.attach`, `dbgprobe.svd.info`, `dbgprobe.svd.read`, `dbgprobe.svd.write`, `dbgprobe.svd.set_field`, `dbgprobe.svd.update_fields`, `dbgprobe.svd.list_peripherals`, `dbgprobe.svd.list_registers`, `dbgprobe.svd.list_fields`, `dbgprobe.svd.describe` |
 | **RTT** | `dbgprobe.rtt.start`, `dbgprobe.rtt.stop`, `dbgprobe.rtt.read`, `dbgprobe.rtt.write`, `dbgprobe.rtt.status` |
+| **Plugins** | `dbgprobe.plugin.list`, `dbgprobe.plugin.template`, `dbgprobe.plugin.load`, `dbgprobe.plugin.reload` |
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
 
 See [docs/tools.md](docs/tools.md) for full schemas and examples.
@@ -139,6 +140,7 @@ claude mcp add dbgprobe -e DBGPROBE_MCP_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 | `DBGPROBE_MCP_TRACE` | enabled | JSONL tracing of every tool call. Set to `0`, `false`, or `no` to disable. |
 | `DBGPROBE_MCP_TRACE_PAYLOADS` | disabled | Include memory data payloads in traced args (stripped by default). |
 | `DBGPROBE_MCP_TRACE_MAX_BYTES` | `16384` | Max payload chars before truncation (only when `TRACE_PAYLOADS` is on). |
+| `DBGPROBE_MCP_PLUGINS` | disabled | Plugin policy: `all` or comma-separated plugin names (e.g. `nrf52,stm32`). |
 
 ### J-Link backend
 
@@ -225,6 +227,7 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 - **RTT channel 0 only.** RTT support is limited to channel 0 (terminal). Multi-channel RTT is a future enhancement.
 - **Flash clears breakpoints.** Flashing new firmware invalidates breakpoints (the code at those addresses may have changed). The session stays alive but breakpoints are cleared.
 - **Cortex-M only.** Breakpoints use Thumb-mode (`kind=2`). Cortex-A/R targets (ARM-mode, `kind=4`) are not yet supported.
+- **Instruction-level step only.** `dbgprobe.step` single-steps one CPU instruction. Source-level stepping (step into/over/out) is not supported.
 
 ---
 
