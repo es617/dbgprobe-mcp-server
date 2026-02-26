@@ -6,7 +6,7 @@ from typing import Any
 
 from mcp.types import Tool
 
-from dbgprobe_mcp_server.helpers import _ok, _parse_addr
+from dbgprobe_mcp_server.helpers import _coerce_bool, _ok, _parse_addr
 from dbgprobe_mcp_server.state import ProbeState
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ TOOLS: list[Tool] = [
                     "default": "utf-8",
                 },
                 "newline": {
-                    "type": "boolean",
+                    "type": ["boolean", "string"],
                     "description": "Append '\\n' to the data (default false). Convenience for terminal input.",
                     "default": False,
                 },
@@ -175,7 +175,7 @@ async def handle_rtt_write(state: ProbeState, args: dict[str, Any]) -> dict[str,
         raise ConnectionError("No backend attached to this session.")
     data_str = args["data"]
     encoding = args.get("encoding", "utf-8")
-    append_newline = args.get("newline", False)
+    append_newline = _coerce_bool(args.get("newline", False))
     if encoding == "hex":
         try:
             data = bytes.fromhex(data_str)
