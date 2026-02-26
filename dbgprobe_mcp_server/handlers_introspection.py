@@ -63,6 +63,8 @@ async def handle_connections_list(state: ProbeState, _args: dict[str, Any]) -> d
                 "device_name": session.svd.device_name,
                 "peripheral_count": len(session.svd.peripherals),
             }
+        if session.backend is not None and session.backend.rtt_active:
+            entry["rtt"] = {"active": True}
         items.append(entry)
     return _ok(
         message=f"{len(items)} session(s).",

@@ -94,6 +94,7 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 | **Introspection** | `dbgprobe.connections.list` |
 | **ELF** | `dbgprobe.elf.attach`, `dbgprobe.elf.info`, `dbgprobe.elf.lookup`, `dbgprobe.elf.symbols` |
 | **SVD** | `dbgprobe.svd.attach`, `dbgprobe.svd.info`, `dbgprobe.svd.read`, `dbgprobe.svd.write`, `dbgprobe.svd.set_field`, `dbgprobe.svd.update_fields`, `dbgprobe.svd.list_peripherals`, `dbgprobe.svd.list_registers`, `dbgprobe.svd.list_fields`, `dbgprobe.svd.describe` |
+| **RTT** | `dbgprobe.rtt.start`, `dbgprobe.rtt.stop`, `dbgprobe.rtt.read`, `dbgprobe.rtt.write`, `dbgprobe.rtt.status` |
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
 
 See [docs/tools.md](docs/tools.md) for full schemas and examples.
@@ -213,13 +214,7 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 
 - [ ] **OpenOCD backend** — support ST-Link, CMSIS-DAP, and other probes via OpenOCD subprocess
 - [ ] **pyOCD backend** — native Python probe access via pyOCD library
-- [ ] **RTT support** — Real-Time Transfer (read target output via persistent debug connection)
-- [x] **SVD support** — named peripheral register read/write using SVD files
-- [x] **Breakpoint support** — hardware and software breakpoints via GDB RSP
-- [x] **GDB integration** — persistent JLinkGDBServer connection with GDB Remote Serial Protocol
-- [x] **ELF support** — symbol lookup, breakpoints by name, auto-enriched responses, flash auto-attach
-- [x] **Hex string addresses** — all address parameters accept hex strings (`"0x20000000"`) in addition to integers
-- [x] **Session-less erase/flash** — erase and flash without an active session (for unlocking secured devices, CI flows)
+- [x] **RTT support** — Real-Time Transfer (read target output via persistent debug connection)
 - [ ] **Multi-core support** — target specific cores on multi-core SoCs
 - [ ] **Cortex-A/R support** — ARM-mode breakpoints (`kind=4`); currently Thumb-only (Cortex-M)
 ---
@@ -227,7 +222,7 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 ## Known limitations
 
 - **Single-client only.** The server handles one MCP session at a time (stdio transport).
-- **No RTT yet.** RTT (Real-Time Transfer) is planned for a future version.
+- **RTT channel 0 only.** RTT support is limited to channel 0 (terminal). Multi-channel RTT is a future enhancement.
 - **Flash clears breakpoints.** Flashing new firmware invalidates breakpoints (the code at those addresses may have changed). The session stays alive but breakpoints are cleared.
 - **Cortex-M only.** Breakpoints use Thumb-mode (`kind=2`). Cortex-A/R targets (ARM-mode, `kind=4`) are not yet supported.
 

@@ -158,6 +158,30 @@ class Backend(ABC):
         """Erase flash through an active debug session."""
         raise NotImplementedError("erase_via_gdb() not supported by this backend")
 
+    # -- Optional RTT methods ------------------------------------------------
+    # Backends that expose RTT (Real-Time Transfer) override these.
+
+    async def rtt_start(self, address: int | None = None) -> dict[str, Any]:
+        """Start RTT. *address* is optional control block address hint."""
+        raise NotImplementedError("RTT not supported by this backend")
+
+    async def rtt_stop(self) -> None:
+        """Stop RTT and release resources."""
+        raise NotImplementedError("RTT not supported by this backend")
+
+    async def rtt_read(self, timeout: float = 0.1) -> bytes:
+        """Read buffered RTT data. Returns empty bytes if nothing available."""
+        raise NotImplementedError("RTT not supported by this backend")
+
+    async def rtt_write(self, data: bytes) -> int:
+        """Write data to RTT channel. Returns bytes written."""
+        raise NotImplementedError("RTT not supported by this backend")
+
+    @property
+    def rtt_active(self) -> bool:
+        """Whether RTT is currently running."""
+        return False
+
 
 class BackendRegistry:
     """Factory that maps backend names to classes."""

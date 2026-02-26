@@ -921,6 +921,110 @@ When an SVD is attached, `dbgprobe.mem.read` automatically includes decoded regi
 
 ---
 
+## RTT (Real-Time Transfer)
+
+Tools for streaming data between host and target over RTT channel 0. RTT uses a control block in target RAM to exchange data without halting the CPU. JLinkGDBServer exposes channel 0 via a telnet port — these tools connect to it.
+
+### dbgprobe.rtt.start
+
+Start RTT on a connected session. Connects to JLinkGDBServer's RTT telnet port and begins buffering target output.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Optional: provide `address` to specify the RTT control block location in target RAM (accepts integer or hex string). If omitted, JLinkGDBServer auto-searches for the "SEGGER RTT" string.
+
+```json
+{ "session_id": "p1a2b3c4", "address": "0x20000000" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "rtt_port": 19021
+}
+```
+
+### dbgprobe.rtt.stop
+
+Stop RTT and disconnect from the telnet port.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+### dbgprobe.rtt.read
+
+Read buffered RTT data from the target. Non-blocking — returns whatever is buffered, waiting up to `timeout` seconds for initial data.
+
+```json
+{ "session_id": "p1a2b3c4", "timeout": 0.5, "encoding": "utf-8" }
+```
+
+- `timeout`: max seconds to wait for data if buffer is empty (default 0.1)
+- `encoding`: `utf-8` (default) or `hex` for binary data
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "data": "Hello from RTT\n",
+  "bytes_read": 15,
+  "encoding": "utf-8"
+}
+```
+
+### dbgprobe.rtt.write
+
+Write data to the target via RTT channel 0.
+
+```json
+{ "session_id": "p1a2b3c4", "data": "hello", "newline": true }
+```
+
+- `data`: text (UTF-8) or hex string depending on `encoding`
+- `encoding`: `utf-8` (default) or `hex`
+- `newline`: append `\n` to the data (default false)
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "bytes_written": 6
+}
+```
+
+### dbgprobe.rtt.status
+
+Return RTT status for a session.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "active": true,
+  "bytes_buffered": 42,
+  "total_read": 1024,
+  "total_written": 128
+}
+```
+
+---
+
 ## Tracing
 
 Tools for inspecting the JSONL trace log. Tracing is enabled by default and records every tool call.
