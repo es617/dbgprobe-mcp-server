@@ -85,7 +85,7 @@ TOOLS: list[Tool] = [
                     "description": "Debug interface (default from DBGPROBE_INTERFACE, typically SWD).",
                 },
                 "speed_khz": {
-                    "type": "integer",
+                    "type": ["integer", "string"],
                     "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ, typically 4000).",
                 },
             },
@@ -127,7 +127,7 @@ TOOLS: list[Tool] = [
                     "description": "Debug interface (default from DBGPROBE_INTERFACE). Only for session-less erase.",
                 },
                 "speed_khz": {
-                    "type": "integer",
+                    "type": ["integer", "string"],
                     "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ). Only for session-less erase.",
                 },
                 "start_addr": {
@@ -231,7 +231,7 @@ TOOLS: list[Tool] = [
                     "description": "Debug interface (default from DBGPROBE_INTERFACE). Only for session-less flash.",
                 },
                 "speed_khz": {
-                    "type": "integer",
+                    "type": ["integer", "string"],
                     "description": "Interface speed in kHz (default from DBGPROBE_SPEED_KHZ). Only for session-less flash.",
                 },
                 "addr": {
@@ -265,7 +265,7 @@ TOOLS: list[Tool] = [
                     "description": 'Start address (e.g. 0x20000000 or "0x20000000").',
                 },
                 "length": {
-                    "type": "integer",
+                    "type": ["integer", "string"],
                     "description": "Number of bytes to read.",
                 },
                 "format": {
@@ -487,7 +487,7 @@ async def handle_connect(state: ProbeState, args: dict[str, Any]) -> dict[str, A
         backend=backend_name,
         device=args.get("device") or DBGPROBE_JLINK_DEVICE,
         interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
-        speed_khz=args.get("speed_khz") or DBGPROBE_SPEED_KHZ,
+        speed_khz=int(args.get("speed_khz") or DBGPROBE_SPEED_KHZ),
         probe_serial=args.get("probe_id"),
     )
 
@@ -553,7 +553,7 @@ async def handle_erase(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
         backend=backend_name,
         device=args.get("device") or DBGPROBE_JLINK_DEVICE,
         interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
-        speed_khz=args.get("speed_khz") or DBGPROBE_SPEED_KHZ,
+        speed_khz=int(args.get("speed_khz") or DBGPROBE_SPEED_KHZ),
         probe_serial=args.get("probe_id"),
     )
 
@@ -714,7 +714,7 @@ async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
         backend=backend_name,
         device=args.get("device") or DBGPROBE_JLINK_DEVICE,
         interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
-        speed_khz=args.get("speed_khz") or DBGPROBE_SPEED_KHZ,
+        speed_khz=int(args.get("speed_khz") or DBGPROBE_SPEED_KHZ),
         probe_serial=args.get("probe_id"),
     )
     try:
@@ -742,7 +742,7 @@ async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
 async def handle_mem_read(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
     address = _parse_addr(args["address"])
-    length = args["length"]
+    length = int(args["length"])
     fmt = args.get("format", "hex")
 
     data = await session.backend.mem_read(address, length)

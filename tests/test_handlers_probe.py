@@ -499,6 +499,36 @@ class TestMemRead:
         assert result["format"] == "u32"
         assert isinstance(result["data"], list)
 
+    async def test_length_as_string(self):
+        """MCP clients may send integer params as strings."""
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_mem_read(
+            state,
+            {
+                "session_id": sid,
+                "address": "0x20000000",
+                "length": "4",
+            },
+        )
+        assert result["ok"] is True
+        assert result["length"] == 4
+
+    async def test_address_as_hex_string(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_mem_read(
+            state,
+            {
+                "session_id": sid,
+                "address": "0x10001208",
+                "length": "4",
+                "format": "hex",
+            },
+        )
+        assert result["ok"] is True
+        assert result["address"] == 0x10001208
+
 
 class TestMemWrite:
     async def test_hex_format(self):
