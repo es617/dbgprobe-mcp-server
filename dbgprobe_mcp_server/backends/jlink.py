@@ -825,7 +825,8 @@ class JLinkBackend(Backend):
         """Background task: read from RTT telnet socket into ring buffer."""
         try:
             while True:
-                assert self._rtt_reader is not None
+                if self._rtt_reader is None:
+                    break
                 data = await self._rtt_reader.read(4096)
                 if not data:
                     break  # EOF — server closed connection
