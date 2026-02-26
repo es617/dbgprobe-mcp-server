@@ -926,14 +926,14 @@ class JLinkBackend(Backend):
         commands: list[str] = []
 
         if ext in (".hex", ".ihex", ".elf"):
-            commands.append(f"loadfile {resolved}")
+            commands.append(f'loadfile "{resolved}"')
         else:
             if addr is None:
                 raise ValueError(
                     f"Binary file {resolved.name} requires an explicit address. "
                     "Pass addr parameter or use .hex/.elf format."
                 )
-            commands.append(f"loadbin {resolved},{addr:#x}")
+            commands.append(f'loadbin "{resolved}",{addr:#x}')
 
         if verify:
             if ext in (".hex", ".ihex", ".elf"):
@@ -941,7 +941,7 @@ class JLinkBackend(Backend):
                 # loadfile already reports errors for .hex/.elf.
                 pass
             elif addr is not None:
-                commands.append(f"verifybin {resolved},{addr:#x}")
+                commands.append(f'verifybin "{resolved}",{addr:#x}')
 
         # If no GDB server will be restarted after flash, handle reset+go
         # in JLinkExe directly.  The "r" command halts the core (via

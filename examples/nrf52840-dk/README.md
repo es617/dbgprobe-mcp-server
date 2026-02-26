@@ -2,6 +2,8 @@
 
 Step-by-step walkthrough using the Debug Probe MCP Server with a Nordic nRF52840-DK development board and its onboard J-Link debugger.
 
+Just tell the agent what you want in plain language — it picks the right tools automatically.
+
 ## Prerequisites
 
 - nRF52840-DK connected via USB
@@ -18,163 +20,91 @@ claude mcp add dbgprobe \
 
 ## Step 1: Discover the probe
 
-List attached J-Link probes to confirm the board is visible:
-
-```
 > List attached debug probes.
-```
 
-Tool call: `dbgprobe.list_probes`
-
-```json
-{
-  "ok": true,
-  "probes": [{
-    "serial": "683456789",
-    "description": "J-Link EDU Mini",
-    "backend": "jlink"
-  }],
-  "count": 1
-}
-```
+The agent will find the J-Link on your board and report its serial number and description.
 
 ## Step 2: Connect
 
-Establish a debug session. The device string `nRF52840_xxAA` tells J-Link which target chip to expect.
-
-```
 > Connect to the nRF52840.
-```
 
-Tool call: `dbgprobe.connect`
+The device string `nRF52840_xxAA` is picked up from the environment variable. The agent establishes a debug session over SWD.
 
-```json
-{
-  "device": "nRF52840_xxAA",
-  "interface": "swd",
-  "speed_khz": 4000
-}
-```
-
-If the device is secured (APPROTECT enabled), you'll get:
-
-```json
-{
-  "ok": false,
-  "error": {
-    "code": "device_secured",
-    "message": "Target device is secured. Use dbgprobe.erase to mass-erase and unlock."
-  }
-}
-```
-
-See [Handling a secured device](#handling-a-secured-device) below.
+If the device is secured (APPROTECT enabled), the agent will tell you and suggest a mass-erase to unlock it. See [Handling a secured device](#handling-a-secured-device) below.
 
 ## Step 3: Flash firmware
 
-Flash a firmware image to the board. `.hex` and `.elf` files auto-detect the target address. `.bin` files require an explicit `addr`.
+> Flash examples/nrf52840-dk/firmware.hex to the board.
 
-```
-> Flash the firmware.
-```
+`.hex` and `.elf` files auto-detect the target address. `.bin` files require an explicit address.
 
-Tool call: `dbgprobe.flash`
+The agent programs the image, verifies it, and resets the target to start running.
 
-```json
-{
-  "session_id": "p1a2b3c4",
-  "path": "examples/nrf52840-dk/firmware.hex"
-}
-```
+## Step 4: Load SVD (optional)
 
-The tool programs the image, verifies it, and resets the target to start running.
+The SVD file gives the agent named access to all peripheral registers instead of raw addresses.
 
-## Step 4: Inspect memory
+> Load the SVD file from /opt/nordic/ncs/v3.2.2/modules/hal/nordic/nrfx/bsp/stable/mdk/nrf52840.svd
 
-Read the Device ID from the FICR (Factory Information Configuration Registers):
+After loading, you can refer to peripherals by name:
 
-```
-> Read 8 bytes from address 0x10000060 (FICR DEVICEID).
-```
+> Read the GPIO P0 OUT register.
 
-Tool call: `dbgprobe.mem.read`
+## Step 5: Inspect memory
 
-```json
-{
-  "session_id": "p1a2b3c4",
-  "address": 268435552,
-  "length": 8,
-  "format": "hex"
-}
-```
+> Read 8 bytes from address 0x10000060 — that's the FICR Device ID.
 
-Returns the unique 64-bit device ID as a hex string.
+The agent reads the memory and returns the unique 64-bit device ID.
 
-## Step 5: Halt, inspect, resume
+## Step 6: Halt, inspect, resume
 
-Halt the CPU, read registers or memory, then resume:
-
-```
 > Halt the CPU, read 4 bytes from 0x20000000, then resume.
-```
 
-Tool calls: `dbgprobe.halt` -> `dbgprobe.mem.read` -> `dbgprobe.go`
+The agent halts the target, reads the memory, and resumes execution — all in one go.
 
-## Step 6: Reset
+## Step 7: Reset
 
-Reset the target in different modes:
-
-```
 > Reset the target.
-```
 
-| Mode | What it does |
+You can also be specific about the reset mode:
+
+| Mode | What to ask |
 |---|---|
-| `soft` (default) | Software reset, target resumes running |
-| `hard` | Hardware reset via the reset pin |
-| `halt` | Reset and halt at the first instruction |
+| Soft (default) | "Reset the target" |
+| Hard | "Do a hard reset" |
+| Halt after reset | "Reset and halt at the first instruction" |
 
-## Step 7: Disconnect
+## Step 8: RTT (Real-Time Transfer)
 
-Close the session when done:
+If your firmware uses SEGGER RTT for logging:
 
-```
-> Disconnect.
-```
+> Start RTT and show me the output.
 
-Tool call: `dbgprobe.disconnect`
+The agent connects to the RTT channel and streams target output. You can also send data:
+
+> Send "hello" to the target via RTT.
+
+When done:
+
+> Stop RTT.
+
+## Step 9: Disconnect
+
+> Disconnect from the board.
 
 ---
 
 ## Handling a secured device
 
-If `dbgprobe.connect` returns `device_secured`, the chip has read protection enabled (Nordic APPROTECT). You can mass-erase to unlock it:
+If the device has read protection enabled (Nordic APPROTECT), the agent will report it on connect. To unlock:
 
-```
 > Erase the device to unlock it.
-```
 
-Tool call: `dbgprobe.erase`
+This mass-erases all flash and unlocks the device. After erasing, reconnect and re-flash your firmware.
 
-```json
-{
-  "device": "nRF52840_xxAA",
-  "interface": "swd",
-  "speed_khz": 4000
-}
-```
+You can also erase a specific address range:
 
-This erases all flash contents and unlocks the device. After erasing, retry `dbgprobe.connect` and re-flash your firmware.
-
-You can also erase a specific address range instead of the full chip:
-
-```json
-{
-  "device": "nRF52840_xxAA",
-  "start_addr": 262144,
-  "end_addr": 524288
-}
-```
+> Erase flash from 0x40000 to 0x80000.
 
 **Warning:** Full chip erase destroys all flash contents including any stored calibration data, keys, or application state.
 
@@ -183,15 +113,11 @@ You can also erase a specific address range instead of the full chip:
 
 ### Locking a device (enabling APPROTECT)
 
-To enable read protection on the nRF52840 (useful for testing the secured device flow):
+To enable read protection (useful for testing the secured device flow):
 
-```
 > Write 0x00 to UICR APPROTECT register at 0x10001208, then reset.
-```
 
-Tool calls: `dbgprobe.mem.write` (address `0x10001208`, data `"00"`) -> `dbgprobe.reset`
-
-After the reset, the device is secured. The next `dbgprobe.connect` will return `device_secured`.
+After the reset, the device is secured.
 
 ---
 
@@ -206,6 +132,16 @@ After the reset, the device is secured. The next `dbgprobe.connect` will return 
 | `0x20000000` | RAM | SRAM start (256 KB) |
 | `0x10000060` | FICR | DEVICEID[0..1] — unique 64-bit device ID |
 | `0x100000A0` | FICR | DEVICEADDR[0..1] — device address (BLE) |
+
+---
+
+## SVD file
+
+The SVD file for the nRF52840 is included in the Nordic nRF Connect SDK:
+
+```
+/opt/nordic/ncs/v3.2.2/modules/hal/nordic/nrfx/bsp/stable/mdk/nrf52840.svd
+```
 
 ---
 
