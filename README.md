@@ -92,10 +92,9 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 |---|---|
 | **Probe** | `dbgprobe.list_probes`, `dbgprobe.connect`, `dbgprobe.erase`, `dbgprobe.disconnect`, `dbgprobe.reset`, `dbgprobe.halt`, `dbgprobe.go`, `dbgprobe.step`, `dbgprobe.status`, `dbgprobe.flash`, `dbgprobe.mem.read`, `dbgprobe.mem.write`, `dbgprobe.breakpoint.set`, `dbgprobe.breakpoint.clear`, `dbgprobe.breakpoint.list` |
 | **Introspection** | `dbgprobe.connections.list` |
-| **Protocol Specs** | `dbgprobe.spec.template`, `dbgprobe.spec.register`, `dbgprobe.spec.list`, `dbgprobe.spec.attach`, `dbgprobe.spec.get`, `dbgprobe.spec.read`, `dbgprobe.spec.search` |
 | **ELF** | `dbgprobe.elf.attach`, `dbgprobe.elf.info`, `dbgprobe.elf.lookup`, `dbgprobe.elf.symbols` |
+| **SVD** | `dbgprobe.svd.attach`, `dbgprobe.svd.info`, `dbgprobe.svd.read`, `dbgprobe.svd.write`, `dbgprobe.svd.set_field`, `dbgprobe.svd.update_fields`, `dbgprobe.svd.list_peripherals`, `dbgprobe.svd.list_registers`, `dbgprobe.svd.list_fields`, `dbgprobe.svd.describe` |
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
-| **Plugins** | `dbgprobe.plugin.template`, `dbgprobe.plugin.list`, `dbgprobe.plugin.reload`, `dbgprobe.plugin.load` |
 
 See [docs/tools.md](docs/tools.md) for full schemas and examples.
 
@@ -122,9 +121,6 @@ claude mcp add dbgprobe \
   -e DBGPROBE_JLINK_DEVICE=nRF52840_xxAA \
   -- dbgprobe_mcp
 
-# Enable plugins
-claude mcp add dbgprobe -e DBGPROBE_MCP_PLUGINS=all -- dbgprobe_mcp
-
 # Debug logging
 claude mcp add dbgprobe -e DBGPROBE_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 ```
@@ -139,7 +135,6 @@ claude mcp add dbgprobe -e DBGPROBE_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 |---|---|---|
 | `DBGPROBE_BACKEND` | `jlink` | Debug probe backend. Future: `openocd`, `pyocd`. |
 | `DBGPROBE_LOG_LEVEL` | `WARNING` | Python log level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). Logs go to stderr. |
-| `DBGPROBE_MCP_PLUGINS` | disabled | Plugin policy: `all` to allow all, or `name1,name2` to allow specific plugins. |
 | `DBGPROBE_MCP_TRACE` | enabled | JSONL tracing of every tool call. Set to `0`, `false`, or `no` to disable. |
 | `DBGPROBE_MCP_TRACE_PAYLOADS` | disabled | Include memory data payloads in traced args (stripped by default). |
 | `DBGPROBE_MCP_TRACE_MAX_BYTES` | `16384` | Max payload chars before truncation (only when `TRACE_PAYLOADS` is on). |
@@ -156,14 +151,6 @@ claude mcp add dbgprobe -e DBGPROBE_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 | `DBGPROBE_SPEED_KHZ` | `4000` | Interface clock speed in kHz. |
 | `DBGPROBE_GDB_TRACE` | disabled | Log all GDB RSP packets to file. Set to `1`, `true`, or `yes` to enable. |
 | `DBGPROBE_GDB_TRACE_FILE` | `/tmp/gdb_trace.log` | Path for GDB RSP trace log (only when `GDB_TRACE` is on). |
-
----
-
-## Protocol Specs
-
-Specs are markdown files that describe a target device's debug protocol — register maps, memory layout, boot sequences, and multi-step flows. They live in `.dbgprobe_mcp/specs/` and teach the agent what the hardware can do.
-
-Without a spec, the agent can still connect and interact with the probe. With a spec, it knows what memory regions matter, what register values mean, and how to perform device-specific operations.
 
 ---
 
@@ -184,15 +171,23 @@ The agent calls `elf.attach`, `breakpoint.set(symbol="main")`, `go`, then `statu
 
 ---
 
-## Plugins
+## SVD Support
 
-Plugins add device-specific shortcut tools to the server. Instead of the agent composing raw mem.read/mem.write sequences, a plugin provides high-level operations like `nrf52.read_ficr` or `stm32.unlock_flash`.
+Attach an SVD (System View Description) file to a session to enable register-level peripheral access:
 
-To enable plugins:
+- **Named register reads** — `svd.read("GPIO.OUT")` returns the raw value and all decoded fields with enum names
+- **Field-level reads** — `svd.read("GPIO.PIN_CNF[3].PULL")` returns the field value and enum name ("PullUp")
+- **Safe field writes** — `svd.set_field("GPIO.PIN_CNF[3].PULL", "PullUp")` does read-modify-write
+- **Batch field updates** — `svd.update_fields("GPIO.PIN_CNF[3]", {"DIR": "Output", "PULL": "PullUp"})` — one read, one write
+- **Raw register writes** — `svd.write("GPIO.OUT", 0x01)` — full register, no RMW
+- **Discovery** — list peripherals, registers, fields; describe with enums
+- **Auto-decode on mem.read** — when an SVD is attached and `mem.read` hits a known register address, the response includes decoded fields
 
-```bash
-claude mcp add dbgprobe -e DBGPROBE_MCP_PLUGINS=all -- dbgprobe_mcp
 ```
+> "Attach the SVD, read GPIO.PIN_CNF[3], and set PULL to PullUp."
+```
+
+The agent calls `svd.attach`, `svd.read("GPIO.PIN_CNF[3]")`, then `svd.set_field("GPIO.PIN_CNF[3].PULL", "PullUp")` — and gets back decoded field values instead of raw hex.
 
 ---
 
@@ -219,7 +214,7 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 - [ ] **OpenOCD backend** — support ST-Link, CMSIS-DAP, and other probes via OpenOCD subprocess
 - [ ] **pyOCD backend** — native Python probe access via pyOCD library
 - [ ] **RTT support** — Real-Time Transfer (read target output via persistent debug connection)
-- [ ] **SVD support** — named peripheral register read/write using SVD files
+- [x] **SVD support** — named peripheral register read/write using SVD files
 - [x] **Breakpoint support** — hardware and software breakpoints via GDB RSP
 - [x] **GDB integration** — persistent JLinkGDBServer connection with GDB Remote Serial Protocol
 - [x] **ELF support** — symbol lookup, breakpoints by name, auto-enriched responses, flash auto-attach

@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="utf-8"?>
+<device schemaVersion="1.1" xmlns:xs="http://www.w3.org/2001/XMLSchema-instance" xs:noNamespaceSchemaLocation="CMSIS-SVD.xsd">
+  <vendor>TestVendor</vendor>
+  <name>TestDevice</name>
+  <version>1.0</version>
+  <description>Minimal test SVD for unit tests</description>
+  <addressUnitBits>8</addressUnitBits>
+  <width>32</width>
+  <size>32</size>
+  <resetValue>0x00000000</resetValue>
+  <resetMask>0xFFFFFFFF</resetMask>
+
+  <peripherals>
+    <peripheral>
+      <name>GPIO</name>
+      <description>General purpose input/output</description>
+      <baseAddress>0x50000000</baseAddress>
+      <registers>
+        <register>
+          <name>OUT</name>
+          <description>Write GPIO port</description>
+          <addressOffset>0x504</addressOffset>
+          <size>32</size>
+          <access>read-write</access>
+          <resetValue>0x00000000</resetValue>
+          <fields>
+            <field>
+              <name>PIN0</name>
+              <description>Pin 0</description>
+              <bitOffset>0</bitOffset>
+              <bitWidth>1</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Low</name><description>Pin low</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>High</name><description>Pin high</description><value>1</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+            <field>
+              <name>PIN1</name>
+              <description>Pin 1</description>
+              <bitOffset>1</bitOffset>
+              <bitWidth>1</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Low</name><description>Pin low</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>High</name><description>Pin high</description><value>1</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+          </fields>
+        </register>
+
+        <register>
+          <name>IN</name>
+          <description>Read GPIO port</description>
+          <addressOffset>0x510</addressOffset>
+          <size>32</size>
+          <access>read-only</access>
+          <resetValue>0x00000000</resetValue>
+          <fields>
+            <field>
+              <name>PIN0</name>
+              <description>Pin 0</description>
+              <bitOffset>0</bitOffset>
+              <bitWidth>1</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Low</name><description>Pin low</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>High</name><description>Pin high</description><value>1</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+          </fields>
+        </register>
+
+        <register>
+          <name>DIR</name>
+          <description>Direction register</description>
+          <addressOffset>0x514</addressOffset>
+          <size>32</size>
+          <access>read-write</access>
+          <resetValue>0x00000000</resetValue>
+          <fields>
+            <field>
+              <name>PIN0</name>
+              <description>Pin 0 direction</description>
+              <bitOffset>0</bitOffset>
+              <bitWidth>1</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Input</name><description>Input</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>Output</name><description>Output</description><value>1</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+          </fields>
+        </register>
+
+        <register>
+          <name>PIN_CNF[%s]</name>
+          <description>Configuration of GPIO pins</description>
+          <addressOffset>0x700</addressOffset>
+          <size>32</size>
+          <access>read-write</access>
+          <resetValue>0x00000002</resetValue>
+          <dim>4</dim>
+          <dimIncrement>4</dimIncrement>
+          <dimIndex>0-3</dimIndex>
+          <fields>
+            <field>
+              <name>DIR</name>
+              <description>Pin direction</description>
+              <bitOffset>0</bitOffset>
+              <bitWidth>1</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Input</name><description>Configure pin as an input pin</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>Output</name><description>Configure pin as an output pin</description><value>1</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+            <field>
+              <name>INPUT</name>
+              <description>Connect or disconnect input buffer</description>
+              <bitOffset>1</bitOffset>
+              <bitWidth>1</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Connect</name><description>Connect input buffer</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>Disconnect</name><description>Disconnect input buffer</description><value>1</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+            <field>
+              <name>PULL</name>
+              <description>Pull configuration</description>
+              <bitOffset>2</bitOffset>
+              <bitWidth>2</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Disabled</name><description>No pull</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>PullDown</name><description>Pull down on pin</description><value>1</value></enumeratedValue>
+                <enumeratedValue><name>PullUp</name><description>Pull up on pin</description><value>3</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+            <field>
+              <name>DRIVE</name>
+              <description>Drive configuration</description>
+              <bitOffset>8</bitOffset>
+              <bitWidth>3</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>S0S1</name><description>Standard 0, standard 1</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>H0S1</name><description>High drive 0, standard 1</description><value>1</value></enumeratedValue>
+                <enumeratedValue><name>S0H1</name><description>Standard 0, high drive 1</description><value>2</value></enumeratedValue>
+                <enumeratedValue><name>H0H1</name><description>High drive 0, high drive 1</description><value>3</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+            <field>
+              <name>SENSE</name>
+              <description>Pin sensing mechanism</description>
+              <bitOffset>16</bitOffset>
+              <bitWidth>2</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Disabled</name><description>Disabled</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>High</name><description>Sense for high level</description><value>2</value></enumeratedValue>
+                <enumeratedValue><name>Low</name><description>Sense for low level</description><value>3</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+          </fields>
+        </register>
+
+        <register>
+          <name>OUTSET</name>
+          <description>Set individual bits in GPIO port</description>
+          <addressOffset>0x508</addressOffset>
+          <size>32</size>
+          <access>write-only</access>
+          <resetValue>0x00000000</resetValue>
+          <fields>
+            <field>
+              <name>PIN0</name>
+              <description>Pin 0</description>
+              <bitOffset>0</bitOffset>
+              <bitWidth>1</bitWidth>
+            </field>
+          </fields>
+        </register>
+      </registers>
+    </peripheral>
+
+    <peripheral>
+      <name>TIMER0</name>
+      <description>Timer/Counter 0</description>
+      <baseAddress>0x40008000</baseAddress>
+      <registers>
+        <register>
+          <name>MODE</name>
+          <description>Timer mode selection</description>
+          <addressOffset>0x504</addressOffset>
+          <size>32</size>
+          <access>read-write</access>
+          <resetValue>0x00000000</resetValue>
+          <fields>
+            <field>
+              <name>MODE</name>
+              <description>Timer mode</description>
+              <bitOffset>0</bitOffset>
+              <bitWidth>2</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>Timer</name><description>Timer mode</description><value>0</value></enumeratedValue>
+                <enumeratedValue><name>Counter</name><description>Counter mode</description><value>1</value></enumeratedValue>
+                <enumeratedValue><name>LowPowerCounter</name><description>Low power counter mode</description><value>2</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+          </fields>
+        </register>
+      </registers>
+    </peripheral>
+  </peripherals>
+</device>

@@ -20,9 +20,8 @@ from dbgprobe_mcp_server import (
 from dbgprobe_mcp_server import (
     handlers_elf,
     handlers_introspection,
-    handlers_plugin,
     handlers_probe,
-    handlers_spec,
+    handlers_svd,
     handlers_trace,
 )
 from dbgprobe_mcp_server.backend import DeviceSecuredError
@@ -30,8 +29,6 @@ from dbgprobe_mcp_server.helpers import (
     _err,
     _result_text,
 )
-from dbgprobe_mcp_server.plugins import PluginManager, parse_plugin_policy
-from dbgprobe_mcp_server.specs import resolve_spec_root
 from dbgprobe_mcp_server.state import ProbeState
 from dbgprobe_mcp_server.trace import get_trace_buffer, init_trace, sanitize_args
 
@@ -59,31 +56,17 @@ def build_server() -> tuple[Server, ProbeState]:
     tools: list[Tool] = (
         handlers_probe.TOOLS
         + handlers_introspection.TOOLS
-        + handlers_spec.TOOLS
         + handlers_elf.TOOLS
+        + handlers_svd.TOOLS
         + handlers_trace.TOOLS
-        + handlers_plugin.TOOLS
     )
     handlers: dict[str, Any] = {
         **handlers_probe.HANDLERS,
         **handlers_introspection.HANDLERS,
-        **handlers_spec.HANDLERS,
         **handlers_elf.HANDLERS,
+        **handlers_svd.HANDLERS,
         **handlers_trace.HANDLERS,
     }
-
-    # --- Plugin system ---
-    plugins_dir = resolve_spec_root() / "plugins"
-    plugins_enabled, plugins_allowlist = parse_plugin_policy()
-    manager = PluginManager(
-        plugins_dir,
-        tools,
-        handlers,
-        enabled=plugins_enabled,
-        allowlist=plugins_allowlist,
-    )
-    manager.load_all()
-    handlers.update(handlers_plugin.make_handlers(manager, server))
 
     @server.list_tools()
     async def _list_tools() -> list[Tool]:

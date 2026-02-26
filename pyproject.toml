@@ -16,6 +16,7 @@ dependencies = [
     "mcp>=1.0,<2",
     "pyyaml>=6.0,<7",
     "pyelftools>=0.30",
+    "cmsis-svd>=0.5",
 ]
 
 [project.optional-dependencies]
