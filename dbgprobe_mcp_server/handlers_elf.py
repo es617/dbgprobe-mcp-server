@@ -90,7 +90,7 @@ TOOLS: list[Tool] = [
                     "description": "Symbol type filter (e.g. FUNC, OBJECT).",
                 },
                 "limit": {
-                    "type": "integer",
+                    "type": ["integer", "string"],
                     "description": "Max results (default 50).",
                 },
             },
