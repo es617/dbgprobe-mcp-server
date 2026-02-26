@@ -57,6 +57,12 @@ async def handle_connections_list(state: ProbeState, _args: dict[str, Any]) -> d
                 "symbol_count": sum(len(v) for v in session.elf.symbols.values()),
                 "function_count": len(session.elf._sorted_functions),
             }
+        if session.svd is not None:
+            entry["svd"] = {
+                "path": session.svd.path,
+                "device_name": session.svd.device_name,
+                "peripheral_count": len(session.svd.peripherals),
+            }
         items.append(entry)
     return _ok(
         message=f"{len(items)} session(s).",

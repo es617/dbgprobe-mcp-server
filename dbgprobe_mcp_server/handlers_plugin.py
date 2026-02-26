@@ -28,14 +28,11 @@ from mcp.types import Tool
 from dbgprobe_mcp_server.helpers import _ok, _err  # _ok(key=val) / _err("code", "message")
 from dbgprobe_mcp_server.state import ProbeState
 
-# Import core handlers to interact with the device.
-# IMPORTANT: always use these instead of conn.ser directly — a background
-# thread owns the debug probe for reads, and writes need a lock.
+# Import core handlers to interact with the debug probe.
+# Each takes (state: ProbeState, args: dict) and returns a dict.
 from dbgprobe_mcp_server.handlers_probe import (
-    handle_write,      # send data to the device
-    handle_read,       # read raw bytes
-    handle_readline,   # read one line (up to newline)
-    handle_read_until, # read until a delimiter string
+    handle_mem_read,   # read memory: args session_id, address, length
+    handle_mem_write,  # write memory: args session_id, address, data (hex), length
 )
 
 # Optional metadata — helps the agent match this plugin to a device.
@@ -52,28 +49,29 @@ TOOLS = [
         inputSchema={{
             "type": "object",
             "properties": {{
-                "connection_id": {{"type": "string"}},
+                "session_id": {{"type": "string"}},
             }},
-            "required": ["connection_id"],
+            "required": ["session_id"],
         }},
     ),
 ]
 
 
 async def handle_example(state: ProbeState, args: dict) -> dict:
-    connection_id = args["connection_id"]
-    # Send a command using handle_write + handle_read_until:
-    #   await handle_write(state, {{
-    #       "connection_id": connection_id,
-    #       "data": "COMMAND",
-    #       "append_newline": True,
+    session_id = args["session_id"]
+    # Read memory using handle_mem_read:
+    #   resp = await handle_mem_read(state, {{
+    #       "session_id": session_id,
+    #       "address": "0x50000504",
+    #       "length": 4,
     #   }})
-    #   resp = await handle_read_until(state, {{
-    #       "connection_id": connection_id,
-    #       "delimiter": "> ",
-    #       "timeout_ms": 2000,
+    #
+    # Write memory using handle_mem_write:
+    #   resp = await handle_mem_write(state, {{
+    #       "session_id": session_id,
+    #       "address": "0x50000504",
+    #       "data": "01000000",
     #   }})
-    #   text = resp["data"]
     #
     # Return errors with: return _err("error_code", "Human-readable message")
     # Return success with: return _ok(key1=val1, key2=val2)

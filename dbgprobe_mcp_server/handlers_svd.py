@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp.types import Tool
 
-from dbgprobe_mcp_server.helpers import _err, _ok
+from dbgprobe_mcp_server.helpers import _err, _ok, _validate_file_path
 from dbgprobe_mcp_server.state import ProbeState
 from dbgprobe_mcp_server.svd import (
     SvdData,
@@ -260,11 +260,6 @@ def _parse_value(value: int | str) -> int:
     raise ValueError(f"Invalid value type: {type(value).__name__}")
 
 
-def _read_register(backend: Any, address: int, size_bits: int) -> int:
-    """This is a placeholder — actual reads go through the backend in the async handler."""
-    raise NotImplementedError("Use the async version")
-
-
 async def _mem_read_reg(backend: Any, address: int, size_bits: int) -> int:
     """Read a register from memory and unpack to int."""
     size_bytes = size_bits // 8
@@ -296,10 +291,15 @@ async def _mem_write_reg(backend: Any, address: int, size_bits: int, value: int)
 
 async def handle_svd_attach(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
-    path = args["path"]
+    try:
+        path = _validate_file_path(args["path"], {".svd", ".xml"})
+    except FileNotFoundError as exc:
+        return _err("not_found", str(exc))
+    except ValueError as exc:
+        return _err("invalid_path", str(exc))
 
     try:
-        svd = parse_svd(path)
+        svd = parse_svd(str(path))
     except FileNotFoundError as exc:
         return _err("not_found", str(exc))
     except Exception as exc:

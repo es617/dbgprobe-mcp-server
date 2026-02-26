@@ -245,32 +245,32 @@ class GdbClient:
             return
         try:
             while not self._closed:
-                byte = await self._reader.read(1)
-                if not byte:
+                # Read until we see '$' (packet start).  Any '+'/'-'/other
+                # bytes before it are ack/nack or noise — handle inline.
+                try:
+                    raw = await self._reader.readuntil(b"$")
+                except asyncio.IncompleteReadError:
                     break  # EOF
-
-                ch = byte[0:1]
-                if ch == b"+":
-                    continue  # ack — ignore
-                if ch == b"-":
+                # Everything before the '$' delimiter: scan for NACKs.
+                prefix = raw[:-1]  # strip the '$' itself
+                if b"-" in prefix:
                     logger.warning("GDB stub sent NACK")
-                    continue
 
-                if ch == b"$":
-                    raw = await self._read_until_hash()
-                    payload = raw.decode("ascii", errors="replace")
-                    logger.debug("GDB RX: $%s", payload)
+                # Now read the packet body + '#XX' checksum.
+                body_and_checksum = await self._read_packet_body()
+                payload = body_and_checksum.decode("ascii", errors="replace")
+                logger.debug("GDB RX: $%s", payload)
 
-                    # Send ack
-                    if self._ack_mode and self._writer is not None:
-                        self._writer.write(b"+")
-                        await self._writer.drain()
+                # Send ack
+                if self._ack_mode and self._writer is not None:
+                    self._writer.write(b"+")
+                    await self._writer.drain()
 
-                    # Strip checksum (last 2 chars after #)
-                    body = payload[:-3] if len(payload) >= 3 and "#" in payload else payload
+                # Strip '#XX' checksum suffix.
+                body = payload[:-3]
 
-                    # Dispatch
-                    self._dispatch_packet(body)
+                # Dispatch
+                self._dispatch_packet(body)
 
         except asyncio.CancelledError:
             return
@@ -284,20 +284,21 @@ class GdbClient:
                 self._stop_data = ""
                 self._stop_event.set()
 
-    async def _read_until_hash(self) -> bytes:
-        """Read until we see '#XX' (hash + 2 hex checksum chars)."""
+    async def _read_packet_body(self) -> bytes:
+        """Read packet body through '#XX' (hash + 2-char checksum).
+
+        Uses readuntil(b'#') to grab everything up to the hash in one
+        call, then readexactly(2) for the checksum — two event-loop
+        iterations per packet regardless of payload size.
+        """
         if self._reader is None:
             raise GdbConnectionError("Not connected")
-        buf = bytearray()
-        while True:
-            b = await self._reader.read(1)
-            if not b:
-                raise GdbConnectionError("Connection closed while reading packet")
-            buf.extend(b)
-            # Check if we have '#XX' at the end
-            if len(buf) >= 3 and buf[-3:][0:1] == b"#":
-                break
-        return bytes(buf)
+        try:
+            up_to_hash = await self._reader.readuntil(b"#")
+            checksum = await self._reader.readexactly(2)
+        except asyncio.IncompleteReadError:
+            raise GdbConnectionError("Connection closed while reading packet") from None
+        return up_to_hash + checksum
 
     def _dispatch_packet(self, body: str) -> None:
         """Route a received packet body to the right channel."""

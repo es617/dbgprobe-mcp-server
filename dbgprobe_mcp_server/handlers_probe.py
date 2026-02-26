@@ -419,14 +419,12 @@ def _enrich_mem_read_svd(
     if length != reg_bytes:
         return
     # Unpack the raw value
-    import struct as _struct
-
     if reg_bytes == 1:
         raw = data[0]
     elif reg_bytes == 2:
-        raw = _struct.unpack("<H", data[:2])[0]
+        raw = struct.unpack("<H", data[:2])[0]
     else:
-        raw = _struct.unpack("<I", data[:4])[0]
+        raw = struct.unpack("<I", data[:4])[0]
     decoded = decode_register(reg, raw)
     result["svd"] = {
         "peripheral": periph.name,
@@ -581,7 +579,7 @@ async def handle_disconnect(state: ProbeState, args: dict[str, Any]) -> dict[str
         try:
             await session.backend.disconnect()
         except Exception:
-            pass
+            logger.debug("Error during disconnect for session %s", session_id, exc_info=True)
 
     del state.sessions[session_id]
     return _ok(session_id=session_id)
@@ -719,11 +717,8 @@ async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
         speed_khz=args.get("speed_khz") or DBGPROBE_SPEED_KHZ,
         probe_serial=args.get("probe_id"),
     )
-    # Set config so backend.flash() can use it for JLinkExe args
-    backend._config = config
-
     try:
-        result = await backend.flash(path, addr=addr, verify=verify, reset_after=reset_after)
+        result = await backend.flash(path, addr=addr, verify=verify, reset_after=reset_after, config=config)
     except FileNotFoundError as exc:
         return _err("file_not_found", str(exc))
     except TimeoutError:

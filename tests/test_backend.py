@@ -30,7 +30,7 @@ class DummyBackend(Backend):
     async def go(self):
         return {}
 
-    async def flash(self, path, addr=None, verify=True, reset_after=True):
+    async def flash(self, path, addr=None, verify=True, reset_after=True, config=None):
         return {"file": path}
 
     async def mem_read(self, address, length):

@@ -38,4 +38,4 @@ class TestBuildServer:
         server, state = build_server()
         assert server is not None
         assert state is not None
-        assert hasattr(state, "connections")
+        assert hasattr(state, "sessions")

@@ -7,7 +7,7 @@ from typing import Any
 from mcp.types import Tool
 
 from dbgprobe_mcp_server.elf import ElfData, parse_elf, resolve_address, resolve_symbol, search_symbols
-from dbgprobe_mcp_server.helpers import _err, _ok, _parse_addr
+from dbgprobe_mcp_server.helpers import _err, _ok, _parse_addr, _validate_file_path
 from dbgprobe_mcp_server.state import ProbeState
 
 # ---------------------------------------------------------------------------
@@ -119,10 +119,15 @@ def _elf_summary(elf: ElfData) -> dict[str, Any]:
 
 async def handle_elf_attach(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:
     session = state.get_session(args["session_id"])
-    path = args["path"]
+    try:
+        path = _validate_file_path(args["path"], {".elf", ".axf", ".out"})
+    except FileNotFoundError as exc:
+        return _err("not_found", str(exc))
+    except ValueError as exc:
+        return _err("invalid_path", str(exc))
 
     try:
-        elf = parse_elf(path)
+        elf = parse_elf(str(path))
     except FileNotFoundError as exc:
         return _err("not_found", str(exc))
     except Exception as exc:

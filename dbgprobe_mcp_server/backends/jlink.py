@@ -769,7 +769,10 @@ class JLinkBackend(Backend):
         addr: int | None = None,
         verify: bool = True,
         reset_after: bool = True,
+        config: ConnectConfig | None = None,
     ) -> dict[str, Any]:
+        if config is not None:
+            self._config = config
         self._require_config()
         if self._exe is None:
             self._resolve_paths()

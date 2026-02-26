@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from mcp.types import TextContent
@@ -35,6 +36,25 @@ def _err(code: str, message: str) -> dict[str, Any]:
 
 def _result_text(payload: dict[str, Any]) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, default=str))]
+
+
+def _validate_file_path(path: str, allowed_extensions: set[str]) -> Path:
+    """Resolve *path* and validate it for file-attach operations.
+
+    Checks:
+    - Path resolves to an existing regular file (not a directory, device, etc.)
+    - File extension is in *allowed_extensions* (lowercase, with leading dot)
+
+    Returns the resolved ``Path``.
+    Raises ``FileNotFoundError`` or ``ValueError`` on failure.
+    """
+    resolved = Path(path).resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"File not found: {path}")
+    if resolved.suffix.lower() not in allowed_extensions:
+        exts = ", ".join(sorted(allowed_extensions))
+        raise ValueError(f"Unsupported file type {resolved.suffix!r} — expected: {exts}")
+    return resolved
 
 
 def _parse_addr(value: int | str | None) -> int | None:

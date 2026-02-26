@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from dbgprobe_mcp_server.state import Breakpoint, DbgProbeSession, ProbeConnection, ProbeState
+from dbgprobe_mcp_server.state import Breakpoint, DbgProbeSession, ProbeState
 
 
 class TestProbeState:
@@ -25,12 +25,6 @@ class TestProbeState:
         await state.shutdown()
         assert len(state.sessions) == 0
 
-    def test_connections_alias(self):
-        state = ProbeState()
-        session = DbgProbeSession(connection_id="p1")
-        state.sessions["p1"] = session
-        assert state.connections["p1"] is session
-
     def test_get_session(self):
         state = ProbeState()
         session = DbgProbeSession(connection_id="p1")
@@ -39,20 +33,11 @@ class TestProbeState:
 
     def test_get_session_missing(self):
         state = ProbeState()
-        with pytest.raises(KeyError, match="Unknown connection_id"):
+        with pytest.raises(KeyError, match="Unknown session_id"):
             state.get_session("nope")
-
-    def test_get_connection_backward_compat(self):
-        state = ProbeState()
-        session = DbgProbeSession(connection_id="p1")
-        state.sessions["p1"] = session
-        assert state.get_connection("p1") is session
 
 
 class TestDbgProbeSession:
-    def test_probe_connection_alias(self):
-        assert ProbeConnection is DbgProbeSession
-
     def test_backend_name_default(self):
         session = DbgProbeSession(connection_id="p1")
         assert session.backend_name == "unknown"
