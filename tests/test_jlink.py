@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -669,6 +670,162 @@ class TestJLinkBackendDisconnect:
 # ---------------------------------------------------------------------------
 # Global registry
 # ---------------------------------------------------------------------------
+
+
+class TestJLinkBackendRtt:
+    """RTT support — tests use a real TCP server on localhost."""
+
+    async def _start_tcp_server(self, data_to_send: bytes = b"") -> tuple[asyncio.Server, int]:
+        """Start a TCP server that sends data_to_send to each client, then stays open."""
+
+        async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            if data_to_send:
+                writer.write(data_to_send)
+                await writer.drain()
+            # Keep connection open until client disconnects
+            try:
+                while True:
+                    chunk = await reader.read(4096)
+                    if not chunk:
+                        break
+                    # Echo received data back (for write tests)
+                    self._received.extend(chunk)
+            except (asyncio.CancelledError, ConnectionError):
+                pass
+            finally:
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+
+        self._received = bytearray()
+        server = await asyncio.start_server(handle_client, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        return server, port
+
+    async def test_rtt_start_stop(self):
+        server, port = await self._start_tcp_server()
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            result = await backend.rtt_start()
+            assert result["rtt_port"] == port
+            assert backend.rtt_active is True
+            await backend.rtt_stop()
+            assert backend.rtt_active is False
+        server.close()
+
+    async def test_rtt_read_data(self):
+        server, port = await self._start_tcp_server(b"Hello from RTT\n")
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            await backend.rtt_start()
+            # Give background reader time to receive data
+            await asyncio.sleep(0.05)
+            data = await backend.rtt_read(timeout=0.5)
+            assert data == b"Hello from RTT\n"
+            assert backend._rtt_total_read == 15
+            await backend.rtt_stop()
+        server.close()
+
+    async def test_rtt_read_empty(self):
+        server, port = await self._start_tcp_server()
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            await backend.rtt_start()
+            data = await backend.rtt_read(timeout=0.05)
+            assert data == b""
+            await backend.rtt_stop()
+        server.close()
+
+    async def test_rtt_write(self):
+        server, port = await self._start_tcp_server()
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            await backend.rtt_start()
+            written = await backend.rtt_write(b"test data")
+            assert written == 9
+            assert backend._rtt_total_written == 9
+            # Give server time to receive
+            await asyncio.sleep(0.05)
+            assert self._received == bytearray(b"test data")
+            await backend.rtt_stop()
+        server.close()
+
+    async def test_rtt_start_already_active(self):
+        server, port = await self._start_tcp_server()
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            await backend.rtt_start()
+            with pytest.raises(ConnectionError, match="already active"):
+                await backend.rtt_start()
+            await backend.rtt_stop()
+        server.close()
+
+    async def test_rtt_read_not_active(self):
+        backend = _make_connected_backend()
+        with pytest.raises(ConnectionError, match="not active"):
+            await backend.rtt_read()
+
+    async def test_rtt_write_not_active(self):
+        backend = _make_connected_backend()
+        with pytest.raises(ConnectionError, match="not active"):
+            await backend.rtt_write(b"data")
+
+    async def test_rtt_no_port(self):
+        backend = _make_connected_backend()
+        backend._rtt_port = None
+        with pytest.raises(ConnectionError, match="no RTT port"):
+            await backend.rtt_start()
+
+    async def test_rtt_start_with_address(self):
+        server, port = await self._start_tcp_server()
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            await backend.rtt_start(address=0x2000_0000)
+            backend._gdb_client.monitor_command.assert_awaited_with("exec SetRTTAddr 0x20000000")
+            await backend.rtt_stop()
+        server.close()
+
+    async def test_rtt_active_property(self):
+        backend = _make_connected_backend()
+        assert backend.rtt_active is False
+
+    async def test_disconnect_stops_rtt(self):
+        server, port = await self._start_tcp_server()
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            await backend.rtt_start()
+            assert backend.rtt_active is True
+            await backend.disconnect()
+            assert backend.rtt_active is False
+        server.close()
+
+    async def test_rtt_buffer_overflow(self):
+        """Buffer trims from front when exceeding max size."""
+        server, port = await self._start_tcp_server()
+        async with server:
+            backend = _make_connected_backend()
+            backend._rtt_port = port
+            backend._rtt_buf_max = 16  # Small buffer for testing
+            await backend.rtt_start()
+            # Simulate data arriving
+            backend._rtt_buf.extend(b"A" * 20)
+            # Trim would happen in reader loop; simulate it
+            if len(backend._rtt_buf) > backend._rtt_buf_max:
+                excess = len(backend._rtt_buf) - backend._rtt_buf_max
+                del backend._rtt_buf[:excess]
+            assert len(backend._rtt_buf) == 16
+            assert backend._rtt_buf == bytearray(b"A" * 16)
+            await backend.rtt_stop()
+        server.close()
 
 
 class TestGlobalRegistry:

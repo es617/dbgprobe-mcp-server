@@ -21,6 +21,7 @@ from dbgprobe_mcp_server import (
     handlers_elf,
     handlers_introspection,
     handlers_probe,
+    handlers_rtt,
     handlers_svd,
     handlers_trace,
 )
@@ -58,6 +59,7 @@ def build_server() -> tuple[Server, ProbeState]:
         + handlers_introspection.TOOLS
         + handlers_elf.TOOLS
         + handlers_svd.TOOLS
+        + handlers_rtt.TOOLS
         + handlers_trace.TOOLS
     )
     handlers: dict[str, Any] = {
@@ -65,6 +67,7 @@ def build_server() -> tuple[Server, ProbeState]:
         **handlers_introspection.HANDLERS,
         **handlers_elf.HANDLERS,
         **handlers_svd.HANDLERS,
+        **handlers_rtt.HANDLERS,
         **handlers_trace.HANDLERS,
     }
 

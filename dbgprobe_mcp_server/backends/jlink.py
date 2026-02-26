@@ -385,6 +385,17 @@ class JLinkBackend(Backend):
         self._gdb_port: int | None = None
         self._target_running: bool = False
 
+        # RTT state
+        self._rtt_port: int | None = None
+        self._rtt_reader: asyncio.StreamReader | None = None
+        self._rtt_writer: asyncio.StreamWriter | None = None
+        self._rtt_buf: bytearray = bytearray()
+        self._rtt_task: asyncio.Task | None = None
+        self._rtt_event: asyncio.Event = asyncio.Event()
+        self._rtt_buf_max: int = 64 * 1024  # 64 KB ring buffer
+        self._rtt_total_read: int = 0
+        self._rtt_total_written: int = 0
+
     @property
     def exe(self) -> str:
         if self._exe is None:
@@ -454,6 +465,8 @@ class JLinkBackend(Backend):
         """Spawn JLinkGDBServer and connect via GDB RSP."""
         port = _allocate_free_port()
         self._gdb_port = port
+        rtt_port = _allocate_free_port()
+        self._rtt_port = rtt_port
 
         args = [self._gdbserver_path]  # type: ignore[list-item]
         if config.device:
@@ -461,6 +474,7 @@ class JLinkBackend(Backend):
         args += ["-if", config.interface]
         args += ["-speed", str(config.speed_khz)]
         args += ["-port", str(port)]
+        args += ["-RTTTelnetport", str(rtt_port)]
         args += ["-nogui", "-localhostonly", "1", "-noir"]
         if config.probe_serial:
             args += ["-select", f"USB={config.probe_serial}"]
@@ -555,6 +569,8 @@ class JLinkBackend(Backend):
     # ------------------------------------------------------------------
 
     async def disconnect(self) -> None:
+        if self.rtt_active:
+            await self.rtt_stop()
         await self._close_gdb_client()
         await self._stop_gdbserver()
         self._config = None
@@ -760,6 +776,105 @@ class JLinkBackend(Backend):
         return []
 
     # ------------------------------------------------------------------
+    # RTT — Real-Time Transfer via JLinkGDBServer telnet port
+    # ------------------------------------------------------------------
+
+    @property
+    def rtt_active(self) -> bool:
+        return self._rtt_task is not None and not self._rtt_task.done()
+
+    async def rtt_start(self, address: int | None = None) -> dict[str, Any]:
+        if self.rtt_active:
+            raise ConnectionError("RTT is already active.")
+        if self._rtt_port is None:
+            raise ConnectionError("GDBServer not running — no RTT port available.")
+
+        # Optional: set RTT control block address via GDB monitor command
+        if address is not None:
+            client = self._require_gdb()
+            await client.monitor_command(f"exec SetRTTAddr {address:#x}")
+
+        # Connect to GDBServer's RTT telnet port
+        try:
+            self._rtt_reader, self._rtt_writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", self._rtt_port),
+                timeout=5.0,
+            )
+        except (OSError, TimeoutError) as exc:
+            raise ConnectionError(f"Failed to connect to RTT telnet port {self._rtt_port}: {exc}") from exc
+
+        # Reset state
+        self._rtt_buf.clear()
+        self._rtt_event.clear()
+        self._rtt_total_read = 0
+        self._rtt_total_written = 0
+
+        # Start background reader
+        self._rtt_task = asyncio.create_task(self._rtt_reader_loop())
+        return {"rtt_port": self._rtt_port}
+
+    async def _rtt_reader_loop(self) -> None:
+        """Background task: read from RTT telnet socket into ring buffer."""
+        try:
+            while True:
+                assert self._rtt_reader is not None
+                data = await self._rtt_reader.read(4096)
+                if not data:
+                    break  # EOF — server closed connection
+                self._rtt_buf.extend(data)
+                if len(self._rtt_buf) > self._rtt_buf_max:
+                    excess = len(self._rtt_buf) - self._rtt_buf_max
+                    del self._rtt_buf[:excess]
+                self._rtt_event.set()
+        except (asyncio.CancelledError, ConnectionError, OSError):
+            pass
+
+    async def rtt_read(self, timeout: float = 0.1) -> bytes:
+        if not self.rtt_active:
+            raise ConnectionError("RTT is not active. Call rtt.start first.")
+        # Wait for data if buffer is empty
+        if not self._rtt_buf and timeout > 0:
+            self._rtt_event.clear()
+            try:
+                await asyncio.wait_for(self._rtt_event.wait(), timeout=timeout)
+            except TimeoutError:
+                pass
+        data = bytes(self._rtt_buf)
+        self._rtt_buf.clear()
+        self._rtt_event.clear()
+        self._rtt_total_read += len(data)
+        return data
+
+    async def rtt_write(self, data: bytes) -> int:
+        if not self.rtt_active:
+            raise ConnectionError("RTT is not active. Call rtt.start first.")
+        if self._rtt_writer is None:
+            raise ConnectionError("RTT writer not available.")
+        self._rtt_writer.write(data)
+        await self._rtt_writer.drain()
+        self._rtt_total_written += len(data)
+        return len(data)
+
+    async def rtt_stop(self) -> None:
+        if self._rtt_task is not None:
+            self._rtt_task.cancel()
+            try:
+                await self._rtt_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._rtt_task = None
+        if self._rtt_writer is not None:
+            try:
+                self._rtt_writer.close()
+                await self._rtt_writer.wait_closed()
+            except Exception:
+                pass
+            self._rtt_writer = None
+        self._rtt_reader = None
+        self._rtt_buf.clear()
+        self._rtt_event.clear()
+
+    # ------------------------------------------------------------------
     # flash — teardown GDB → JLinkExe one-shot → restart GDB
     # ------------------------------------------------------------------
 
@@ -790,6 +905,9 @@ class JLinkBackend(Backend):
 
         # 2. Tear down GDB connection — JLinkExe needs exclusive USB access
         had_gdb = self._gdbserver_proc is not None
+        had_rtt = self.rtt_active
+        if had_rtt:
+            await self.rtt_stop()
         await self._close_gdb_client()
         await self._stop_gdbserver()
 
@@ -857,6 +975,12 @@ class JLinkBackend(Backend):
                     self._target_running = True
                 except Exception:
                     pass  # best-effort — flash already succeeded
+            # Restart RTT if it was active before flash
+            if had_rtt:
+                try:
+                    await self.rtt_start()
+                except Exception:
+                    logger.debug("Failed to restart RTT after flash", exc_info=True)
 
         result: dict[str, Any] = {
             "file": str(resolved),

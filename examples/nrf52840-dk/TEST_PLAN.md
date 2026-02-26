@@ -230,6 +230,28 @@ Full flow without an active session:
 
 ---
 
+## 17. RTT (Real-Time Transfer)
+
+Prerequisites: connected session, firmware with RTT enabled (e.g. Zephyr with `CONFIG_USE_SEGGER_RTT=y` and `CONFIG_RTT_CONSOLE=y`).
+
+| # | Test | Expected |
+|---|------|----------|
+| 17.1 | `dbgprobe.rtt.start` with session_id | Returns `ok: true`, `rtt_port` in response. |
+| 17.2 | `dbgprobe.rtt.status` | Returns `ok: true`, `active: true`. |
+| 17.3 | `dbgprobe.rtt.read` with default timeout | Returns target printf output as UTF-8 text. |
+| 17.4 | `dbgprobe.rtt.read` with `encoding: "hex"` | Returns same data as hex string. |
+| 17.5 | `dbgprobe.rtt.write` with `data: "hello"`, `newline: true` | Returns `ok: true`, `bytes_written: 6`. Target receives input. |
+| 17.6 | `dbgprobe.rtt.write` with `encoding: "hex"`, `data: "48656c6c6f"` | Returns `ok: true`, `bytes_written: 5`. |
+| 17.7 | `dbgprobe.connections.list` while RTT active | Session entry includes `"rtt": {"active": true}`. |
+| 17.8 | `dbgprobe.rtt.stop` | Returns `ok: true`. |
+| 17.9 | `dbgprobe.rtt.status` after stop | Returns `active: false`. |
+| 17.10 | `dbgprobe.rtt.start`, then `dbgprobe.flash` (session-based), then `dbgprobe.rtt.status` | RTT auto-restarts after flash — `active: true`. |
+| 17.11 | `dbgprobe.rtt.start` with `address: "0x20000000"` | Returns `ok: true` — address hint sent to GDBServer. |
+| 17.12 | `dbgprobe.rtt.read` with no RTT active | Returns error `disconnected`. |
+| 17.13 | `dbgprobe.rtt.start` when already active | Returns error `disconnected` (already active). |
+
+---
+
 ## Quick smoke test (minimum viable check)
 
 If short on time, run these in order:
