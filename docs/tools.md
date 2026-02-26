@@ -470,72 +470,6 @@ Returns:
 }
 ```
 
-When a spec is attached, the session includes `"spec": { "spec_id": "...", "name": "..." }`.
-
----
-
-## Protocol Specs
-
-Tools for managing target device protocol specs. Specs are markdown files with YAML front-matter stored in `.dbgprobe_mcp/specs/`.
-
-### dbgprobe.spec.template
-
-Return a markdown template for a new debug probe protocol spec.
-
-```json
-{ "device_name": "nRF52840" }
-```
-
-Returns `{ "ok": true, "template": "---\nkind: dbgprobe-protocol\n...", "suggested_path": ".dbgprobe_mcp/specs/nrf52840.md" }`.
-
-### dbgprobe.spec.register
-
-Register a spec file in the index. Validates YAML front-matter (requires `kind: dbgprobe-protocol` and `name`). The path must be inside the project directory.
-
-```json
-{ "path": ".dbgprobe_mcp/specs/nrf52840.md" }
-```
-
-### dbgprobe.spec.list
-
-List all registered specs with their metadata.
-
-```json
-{}
-```
-
-### dbgprobe.spec.attach
-
-Attach a registered spec to a session (in-memory only). The spec will be available via `dbgprobe.spec.get` for the duration of the session.
-
-```json
-{ "connection_id": "p1a2b3c4", "spec_id": "a1b2c3d4e5f67890" }
-```
-
-### dbgprobe.spec.get
-
-Get the attached spec for a session (returns `null` if none attached).
-
-```json
-{ "connection_id": "p1a2b3c4" }
-```
-
-### dbgprobe.spec.read
-
-Read full spec content, file path, and metadata by spec_id.
-
-```json
-{ "spec_id": "a1b2c3d4e5f67890" }
-```
-
-### dbgprobe.spec.search
-
-Full-text search over a spec's content. Returns matching snippets with line numbers and context.
-
-```json
-{ "spec_id": "a1b2c3d4e5f67890", "query": "reset vector", "k": 10 }
-```
-
 ---
 
 ## ELF
@@ -700,6 +634,293 @@ After `dbgprobe.flash` (session-based), the response may include:
 
 ---
 
+## SVD
+
+Tools for register-level peripheral access using SVD (System View Description) files. Attach an SVD file to enable named register reads/writes, field-level access with enum names, and automatic decode on `mem.read`.
+
+### dbgprobe.svd.attach
+
+Parse an SVD file and attach it to a session. Enables named register reads/writes, field-level access, and auto-decode on `mem.read`. Re-attaching replaces the previous SVD.
+
+```json
+{ "session_id": "p1a2b3c4", "path": "/path/to/nrf52840.svd" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "path": "/path/to/nrf52840.svd",
+  "device_name": "nRF52840",
+  "peripheral_count": 52,
+  "register_count": 1234
+}
+```
+
+### dbgprobe.svd.info
+
+Get SVD metadata for a session. Returns `null` if no SVD is attached.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Returns (attached):
+
+```json
+{
+  "ok": true,
+  "svd": {
+    "path": "/path/to/nrf52840.svd",
+    "device_name": "nRF52840",
+    "peripheral_count": 52,
+    "register_count": 1234
+  }
+}
+```
+
+Returns (not attached):
+
+```json
+{ "ok": true, "svd": null }
+```
+
+### dbgprobe.svd.read
+
+Read a register or field by name. For registers, returns the raw value and all decoded fields. For fields, returns just the field value and enum name.
+
+Register read:
+
+```json
+{ "session_id": "p1a2b3c4", "target": "GPIO.OUT" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "target": "GPIO.OUT",
+  "address": 1342179588,
+  "raw": 3,
+  "fields": {
+    "PIN0": { "value": 1, "bit_range": "[0:0]", "enum": "High" },
+    "PIN1": { "value": 1, "bit_range": "[1:1]", "enum": "High" }
+  }
+}
+```
+
+Field read:
+
+```json
+{ "session_id": "p1a2b3c4", "target": "GPIO.PIN_CNF[3].PULL" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "target": "GPIO.PIN_CNF[3].PULL",
+  "register": "GPIO.PIN_CNF[3]",
+  "field": "PULL",
+  "address": 1342179084,
+  "raw_register": 12,
+  "value": 3,
+  "enum": "PullUp"
+}
+```
+
+### dbgprobe.svd.write
+
+Write a raw value to a full register (no read-modify-write). For field-level writes, use `svd.set_field`.
+
+```json
+{ "session_id": "p1a2b3c4", "register": "GPIO.OUT", "value": "0x01" }
+```
+
+Values accept integers or hex strings. Returns error on read-only registers.
+
+### dbgprobe.svd.set_field
+
+Read-modify-write a single register field. Reads the current register value, modifies the specified field, writes back. Accepts enum names or integer values.
+
+```json
+{ "session_id": "p1a2b3c4", "field": "GPIO.PIN_CNF[3].PULL", "value": "PullUp" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "field": "GPIO.PIN_CNF[3].PULL",
+  "address": 1342179084,
+  "old_value": 0,
+  "new_value": 3,
+  "old_enum": "Disabled",
+  "new_enum": "PullUp",
+  "old_raw": 0,
+  "new_raw": 12
+}
+```
+
+### dbgprobe.svd.update_fields
+
+Batch read-modify-write: update multiple fields in one register with a single read and write.
+
+```json
+{
+  "session_id": "p1a2b3c4",
+  "register": "GPIO.PIN_CNF[3]",
+  "fields": {
+    "DIR": "Output",
+    "PULL": "PullUp"
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "register": "GPIO.PIN_CNF[3]",
+  "address": 1342179084,
+  "old_raw": 0,
+  "new_raw": 13,
+  "changes": {
+    "DIR": { "old_value": 0, "new_value": 1, "old_enum": "Input", "new_enum": "Output" },
+    "PULL": { "old_value": 0, "new_value": 3, "old_enum": "Disabled", "new_enum": "PullUp" }
+  }
+}
+```
+
+### dbgprobe.svd.list_peripherals
+
+List all peripherals defined in the attached SVD.
+
+```json
+{ "session_id": "p1a2b3c4" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "peripherals": [
+    { "name": "GPIO", "base_address": 1342177280, "description": "General purpose input/output", "register_count": 42 }
+  ],
+  "count": 52
+}
+```
+
+### dbgprobe.svd.list_registers
+
+List all registers for a peripheral.
+
+```json
+{ "session_id": "p1a2b3c4", "peripheral": "GPIO" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "peripheral": "GPIO",
+  "registers": [
+    { "name": "OUT", "address": 1342179588, "size": 32, "access": "read-write", "field_count": 32 }
+  ],
+  "count": 42
+}
+```
+
+### dbgprobe.svd.list_fields
+
+List all fields for a register.
+
+```json
+{ "session_id": "p1a2b3c4", "peripheral": "GPIO", "register": "PIN_CNF[3]" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "peripheral": "GPIO",
+  "register": "PIN_CNF[3]",
+  "fields": [
+    { "name": "DIR", "bit_offset": 0, "bit_width": 1, "access": null, "enum_values": { "Input": 0, "Output": 1 } },
+    { "name": "PULL", "bit_offset": 2, "bit_width": 2, "access": null, "enum_values": { "Disabled": 0, "PullDown": 1, "PullUp": 3 } }
+  ],
+  "count": 5
+}
+```
+
+### dbgprobe.svd.describe
+
+Detailed description of a peripheral, register, or field. Accepts any level: `"GPIO"`, `"GPIO.OUT"`, or `"GPIO.PIN_CNF[3].PULL"`.
+
+```json
+{ "session_id": "p1a2b3c4", "target": "GPIO.PIN_CNF[3].PULL" }
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "type": "field",
+  "name": "PULL",
+  "register": "GPIO.PIN_CNF[3]",
+  "bit_offset": 2,
+  "bit_width": 2,
+  "bit_range": "[2:3]",
+  "access": "read-write",
+  "description": "Pull configuration",
+  "enum_values": { "Disabled": 0, "PullDown": 1, "PullUp": 3 }
+}
+```
+
+### mem.read SVD enrichment
+
+When an SVD is attached, `dbgprobe.mem.read` automatically includes decoded register fields if the address and length exactly match a known register:
+
+```json
+{
+  "ok": true,
+  "session_id": "p1a2b3c4",
+  "address": 1342179588,
+  "length": 4,
+  "format": "hex",
+  "data": "03000000",
+  "svd": {
+    "peripheral": "GPIO",
+    "register": "OUT",
+    "raw": 3,
+    "fields": {
+      "PIN0": { "value": 1, "bit_range": "[0:0]", "enum": "High" },
+      "PIN1": { "value": 1, "bit_range": "[1:1]", "enum": "High" }
+    }
+  }
+}
+```
+
+---
+
 ## Tracing
 
 Tools for inspecting the JSONL trace log. Tracing is enabled by default and records every tool call.
@@ -722,40 +943,3 @@ Return last N trace events (default 50).
 { "n": 20 }
 ```
 
----
-
-## Plugins
-
-Tools for managing user plugins. Plugins live in `.dbgprobe_mcp/plugins/` and add device-specific tools without modifying the core server. Requires `DBGPROBE_MCP_PLUGINS` env var to be set.
-
-### dbgprobe.plugin.template
-
-Return a Python plugin template. Optionally pre-fill with a device name.
-
-```json
-{ "device_name": "nRF52840" }
-```
-
-### dbgprobe.plugin.list
-
-List loaded plugins with their tool names and metadata.
-
-```json
-{}
-```
-
-### dbgprobe.plugin.reload
-
-Hot-reload a plugin by name. Re-imports the module and refreshes tools.
-
-```json
-{ "name": "nrf52" }
-```
-
-### dbgprobe.plugin.load
-
-Load a new plugin from a file or directory path. The path must be inside `.dbgprobe_mcp/plugins/`.
-
-```json
-{ "path": ".dbgprobe_mcp/plugins/nrf52.py" }
-```

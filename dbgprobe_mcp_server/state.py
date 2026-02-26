@@ -30,6 +30,7 @@ class DbgProbeSession:
     config: ConnectConfig | None = None
     spec: dict[str, Any] | None = None
     elf: Any | None = None  # ElfData when attached, avoids import dependency
+    svd: Any | None = None  # SvdData when attached, avoids import dependency
     created_at: float = field(default_factory=time.time)
     extra: dict[str, Any] = field(default_factory=dict)
     breakpoints: dict[int, Breakpoint] = field(default_factory=dict)  # addr -> Breakpoint

@@ -913,3 +913,77 @@ class TestHandlersIntrospection:
         assert elf_info["path"] == "/mock/fw.elf"
         assert elf_info["symbol_count"] == 1
         assert elf_info["function_count"] == 1
+
+
+class TestMemReadSvdEnrichment:
+    """Test that mem.read adds SVD decode when address matches a register."""
+
+    async def test_enriched_when_svd_attached(self):
+        from pathlib import Path as P
+
+        from dbgprobe_mcp_server.svd import parse_svd
+
+        state = ProbeState()
+        sid, session = _make_session(state)
+        svd_path = str(P(__file__).parent / "fixtures" / "minimal.svd")
+        session.svd = parse_svd(svd_path)
+
+        # GPIO.OUT is at 0x50000504, 4 bytes
+        # MockBackend.mem_read returns bytes(range(length % 256)) => [0,1,2,3]
+        # which unpacks to 0x03020100
+        result = await handle_mem_read(
+            state,
+            {"session_id": sid, "address": 0x5000_0504, "length": 4},
+        )
+        assert result["ok"] is True
+        assert "svd" in result
+        assert result["svd"]["peripheral"] == "GPIO"
+        assert result["svd"]["register"] == "OUT"
+        assert "fields" in result["svd"]
+        assert "PIN0" in result["svd"]["fields"]
+
+    async def test_no_enrichment_without_svd(self):
+        state = ProbeState()
+        sid, _ = _make_session(state)
+        result = await handle_mem_read(
+            state,
+            {"session_id": sid, "address": 0x5000_0504, "length": 4},
+        )
+        assert result["ok"] is True
+        assert "svd" not in result
+
+    async def test_no_enrichment_wrong_size(self):
+        from pathlib import Path as P
+
+        from dbgprobe_mcp_server.svd import parse_svd
+
+        state = ProbeState()
+        sid, session = _make_session(state)
+        svd_path = str(P(__file__).parent / "fixtures" / "minimal.svd")
+        session.svd = parse_svd(svd_path)
+
+        # Read 8 bytes at a 4-byte register address — no enrichment
+        result = await handle_mem_read(
+            state,
+            {"session_id": sid, "address": 0x5000_0504, "length": 8},
+        )
+        assert result["ok"] is True
+        assert "svd" not in result
+
+    async def test_no_enrichment_unknown_address(self):
+        from pathlib import Path as P
+
+        from dbgprobe_mcp_server.svd import parse_svd
+
+        state = ProbeState()
+        sid, session = _make_session(state)
+        svd_path = str(P(__file__).parent / "fixtures" / "minimal.svd")
+        session.svd = parse_svd(svd_path)
+
+        # Read at an address that doesn't match any register
+        result = await handle_mem_read(
+            state,
+            {"session_id": sid, "address": 0x2000_0000, "length": 4},
+        )
+        assert result["ok"] is True
+        assert "svd" not in result

@@ -55,7 +55,9 @@ TOOLS: list[Tool] = [
             "probe connection. Use dbgprobe.go to resume execution if needed. "
             "For symbol-aware debugging, attach an ELF file with dbgprobe.elf.attach "
             "after connecting — this enables breakpoints by function name and "
-            "address-to-symbol resolution in status/step/halt responses."
+            "address-to-symbol resolution in status/step/halt responses. "
+            "For register-level peripheral access, attach an SVD file with "
+            "dbgprobe.svd.attach."
         ),
         inputSchema={
             "type": "object",
@@ -396,6 +398,44 @@ TOOLS: list[Tool] = [
 # ---------------------------------------------------------------------------
 
 
+def _enrich_mem_read_svd(
+    result: dict[str, Any],
+    session: DbgProbeSession,
+    address: int,
+    length: int,
+    data: bytes,
+) -> None:
+    """If SVD is attached and address matches a register, add decoded fields."""
+    if session.svd is None:
+        return
+    from dbgprobe_mcp_server.svd import decode_register, register_at_address
+
+    match = register_at_address(session.svd, address)
+    if match is None:
+        return
+    periph, reg = match
+    # Only decode if the read length matches the register size
+    reg_bytes = reg.size // 8
+    if length != reg_bytes:
+        return
+    # Unpack the raw value
+    import struct as _struct
+
+    if reg_bytes == 1:
+        raw = data[0]
+    elif reg_bytes == 2:
+        raw = _struct.unpack("<H", data[:2])[0]
+    else:
+        raw = _struct.unpack("<I", data[:4])[0]
+    decoded = decode_register(reg, raw)
+    result["svd"] = {
+        "peripheral": periph.name,
+        "register": reg.name,
+        "raw": raw,
+        "fields": decoded,
+    }
+
+
 def _enrich_pc(result: dict[str, Any], session: DbgProbeSession) -> None:
     """If ELF is attached and result has a 'pc' key, add symbol + offset."""
     if session.elf is None:
@@ -713,7 +753,7 @@ async def handle_mem_read(state: ProbeState, args: dict[str, Any]) -> dict[str, 
     data = await session.backend.mem_read(address, length)
 
     if fmt == "base64":
-        return _ok(
+        result = _ok(
             session_id=args["session_id"],
             address=address,
             length=len(data),
@@ -724,7 +764,7 @@ async def handle_mem_read(state: ProbeState, args: dict[str, Any]) -> dict[str, 
         # Pad to multiple of 4 bytes
         padded = data + b"\x00" * ((-len(data)) % 4)
         words = list(struct.unpack(f"<{len(padded) // 4}I", padded))
-        return _ok(
+        result = _ok(
             session_id=args["session_id"],
             address=address,
             length=len(data),
@@ -732,13 +772,16 @@ async def handle_mem_read(state: ProbeState, args: dict[str, Any]) -> dict[str, 
             data=words,
         )
     else:
-        return _ok(
+        result = _ok(
             session_id=args["session_id"],
             address=address,
             length=len(data),
             format="hex",
             data=data.hex(),
         )
+
+    _enrich_mem_read_svd(result, session, address, length, data)
+    return result
 
 
 async def handle_mem_write(state: ProbeState, args: dict[str, Any]) -> dict[str, Any]:

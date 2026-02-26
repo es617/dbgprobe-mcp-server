@@ -166,43 +166,67 @@ Connect and attach ELF, then:
 
 ---
 
-## 13. Secured device (APPROTECT) flow
+## 13. SVD support
 
-This tests the full lock/unlock cycle. **Warning: this erases all flash.**
+Prerequisites: connected session, nRF52840 SVD file available (download from Nordic or CMSIS-Pack).
 
-Enabling APPROTECT on nRF52840 requires an NVMC flash write sequence (not a simple memory write). Steps 13.1–13.2 use the NVMC register sequence to write to UICR.
-
-| # | Step | Expected |
+| # | Test | Expected |
 |---|------|----------|
-| 13.1 | Connect. Enable NVMC write: write `0x01` to NVMC CONFIG at `"0x4001E504"`. Write `0x00` to UICR APPROTECT at `"0x10001208"`. Disable NVMC write: write `0x00` to `"0x4001E504"`. | All writes succeed. |
-| 13.2 | Reset (hard), disconnect, then `dbgprobe.connect` | Returns `ok: false`, error code `device_secured`, message mentions `dbgprobe.erase`. |
-| 13.3 | `dbgprobe.erase` (session-less, full chip, no address params) | Returns `ok: true`, `erased: true`. |
-| 13.4 | `dbgprobe.connect` again | Returns `ok: true` — device is unlocked. |
-| 13.5 | Read UICR APPROTECT at `"0x10001208"` (4 bytes) | Returns `0xFFFFFFFF` (erased/unlocked). |
+| 13.1 | `dbgprobe.svd.attach` with path to nRF52840 SVD file | Returns `ok: true`, `device_name`, `peripheral_count`, `register_count`. |
+| 13.2 | `dbgprobe.svd.info` | Returns SVD metadata matching 13.1. |
+| 13.3 | `dbgprobe.svd.list_peripherals` | Returns list of peripherals (GPIO, UART, TIMER, etc.). |
+| 13.4 | `dbgprobe.svd.list_registers` with `peripheral: "P0"` (or `"GPIO"`) | Returns registers: OUT, IN, DIR, PIN_CNF[0..31], etc. |
+| 13.5 | `dbgprobe.svd.list_fields` with `register: "P0.PIN_CNF[3]"` | Returns fields: DIR, INPUT, PULL, DRIVE, SENSE. |
+| 13.6 | `dbgprobe.svd.read` with `target: "P0.OUT"` | Returns raw value + decoded PIN0/PIN1/... fields. |
+| 13.7 | `dbgprobe.svd.read` with `target: "P0.PIN_CNF[3].PULL"` | Returns field value + enum name ("Disabled", "PullUp", etc.). |
+| 13.8 | `dbgprobe.svd.set_field` with `field: "P0.PIN_CNF[3].PULL", value: "PullUp"` | Returns old + new values, old + new enum names. Read back to verify. |
+| 13.9 | `dbgprobe.svd.update_fields` with `register: "P0.PIN_CNF[3]", fields: {"DIR": "Output", "PULL": "PullUp"}` | Returns old + new values for both fields. |
+| 13.10 | `dbgprobe.svd.write` with `register: "P0.OUT", value: 0x01` | Returns `ok: true`. Read back to verify. |
+| 13.11 | `dbgprobe.svd.describe` with `target: "P0"` | Returns peripheral description with register list. |
+| 13.12 | `dbgprobe.svd.describe` with `target: "P0.PIN_CNF[3].PULL"` | Returns field description with enum values. |
+| 13.13 | `dbgprobe.mem.read` at GPIO OUT register address (e.g. `"0x50000504"`), 4 bytes | Response includes `"svd"` key with peripheral name, register name, decoded fields. |
+| 13.14 | `dbgprobe.svd.write` on read-only register (e.g. `P0.IN`) | Returns `ok: false`, error code `read_only`. |
+| 13.15 | `dbgprobe.svd.read` on write-only register | Returns value with `warning` about write-only. |
 
 ---
 
-## 14. Session-less flow (no connect)
+## 14. Secured device (APPROTECT) flow
+
+This tests the full lock/unlock cycle. **Warning: this erases all flash.**
+
+Enabling APPROTECT on nRF52840 requires an NVMC flash write sequence (not a simple memory write). Steps 14.1–14.2 use the NVMC register sequence to write to UICR.
+
+| # | Step | Expected |
+|---|------|----------|
+| 14.1 | Connect. Enable NVMC write: write `0x01` to NVMC CONFIG at `"0x4001E504"`. Write `0x00` to UICR APPROTECT at `"0x10001208"`. Disable NVMC write: write `0x00` to `"0x4001E504"`. | All writes succeed. |
+| 14.2 | Reset (hard), disconnect, then `dbgprobe.connect` | Returns `ok: false`, error code `device_secured`, message mentions `dbgprobe.erase`. |
+| 14.3 | `dbgprobe.erase` (session-less, full chip, no address params) | Returns `ok: true`, `erased: true`. |
+| 14.4 | `dbgprobe.connect` again | Returns `ok: true` — device is unlocked. |
+| 14.5 | Read UICR APPROTECT at `"0x10001208"` (4 bytes) | Returns `0xFFFFFFFF` (erased/unlocked). |
+
+---
+
+## 15. Session-less flow (no connect)
 
 Full flow without an active session:
 
 | # | Step | Expected |
 |---|------|----------|
-| 14.1 | `dbgprobe.erase` (session-less, full chip) | Returns `ok: true`. |
-| 14.2 | `dbgprobe.flash` (session-less, `.hex` file) | Returns `ok: true`. Board runs firmware. |
-| 14.3 | `ps aux \| grep JLinkGDBServer` | No orphaned GDB server processes. |
-| 14.4 | `dbgprobe.connect` | Connects successfully — no probe lock-up from prior operations. |
-| 14.5 | `dbgprobe.status` | Returns target state (running or halted). |
+| 15.1 | `dbgprobe.erase` (session-less, full chip) | Returns `ok: true`. |
+| 15.2 | `dbgprobe.flash` (session-less, `.hex` file) | Returns `ok: true`. Board runs firmware. |
+| 15.3 | `ps aux \| grep JLinkGDBServer` | No orphaned GDB server processes. |
+| 15.4 | `dbgprobe.connect` | Connects successfully — no probe lock-up from prior operations. |
+| 15.5 | `dbgprobe.status` | Returns target state (running or halted). |
 
 ---
 
-## 15. Error messages and diagnostics
+## 16. Error messages and diagnostics
 
 | # | Test | Expected |
 |---|------|----------|
-| 15.1 | Connect with wrong device string | Error message includes "InitTarget() failed" and probe-vs-target hint. |
-| 15.2 | Connect failure includes JLink output | Error response contains `[JLink output]` section with raw JLinkExe stdout. |
-| 15.3 | `device_secured` error includes JLink output | Same — raw output attached for debugging. |
+| 16.1 | Connect with wrong device string | Error message includes "InitTarget() failed" and probe-vs-target hint. |
+| 16.2 | Connect failure includes JLink output | Error response contains `[JLink output]` section with raw JLinkExe stdout. |
+| 16.3 | `device_secured` error includes JLink output | Same — raw output attached for debugging. |
 
 ---
 
