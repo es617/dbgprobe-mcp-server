@@ -67,6 +67,14 @@ class MockRttBackend(Backend):
     def rtt_active(self) -> bool:
         return self._rtt_running
 
+    def rtt_status(self) -> dict:
+        result: dict = {"active": self.rtt_active}
+        if self.rtt_active:
+            result["bytes_buffered"] = len(self._rtt_buf)
+            result["total_read"] = self._rtt_total_read
+            result["total_written"] = self._rtt_total_written
+        return result
+
     async def rtt_start(self, address: int | None = None) -> dict:
         self._rtt_running = True
         return {"rtt_port": 19021}

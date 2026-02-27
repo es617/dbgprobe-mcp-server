@@ -382,8 +382,22 @@ class TestJLinkBackendStep:
     async def test_step_while_running_raises(self):
         backend = _make_connected_backend()
         backend._target_running = True
+        # wait_stop times out — target is genuinely still running
+        backend._gdb_client.wait_stop = AsyncMock(side_effect=TimeoutError())
         with pytest.raises(ConnectionError, match="running"):
             await backend.step()
+
+    async def test_step_after_async_stop(self):
+        """step() succeeds if target stopped asynchronously (e.g. breakpoint)."""
+        backend = _make_connected_backend()
+        backend._target_running = True
+        # wait_stop returns immediately — target already hit a breakpoint
+        backend._gdb_client.wait_stop = AsyncMock(
+            return_value=StopReply(signal=5, reason="breakpoint", registers={15: 0x0800_0200})
+        )
+        result = await backend.step()
+        assert result["reason"] == "step"
+        assert backend._target_running is False
 
 
 class TestJLinkBackendStatus:
