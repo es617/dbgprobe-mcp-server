@@ -25,6 +25,18 @@ from dbgprobe_mcp_server.state import Breakpoint, DbgProbeSession, ProbeState
 
 logger = logging.getLogger("dbgprobe_mcp_server")
 
+
+def _build_config(args: dict[str, Any], backend_name: str) -> ConnectConfig:
+    """Build a ConnectConfig from handler args + env defaults."""
+    return ConnectConfig(
+        backend=backend_name,
+        device=args.get("device") or DBGPROBE_JLINK_DEVICE,
+        interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
+        speed_khz=int(args.get("speed_khz") or DBGPROBE_SPEED_KHZ),
+        probe_serial=args.get("probe_id"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------
@@ -255,7 +267,9 @@ TOOLS: list[Tool] = [
         name="dbgprobe.mem.read",
         description=(
             "Read memory from the target. Returns data in the requested format: "
-            "'hex' (hex string), 'base64', or 'u32' (array of 32-bit words, little-endian)."
+            "'hex' (hex string), 'base64', or 'u32' (array of 32-bit words, little-endian). "
+            "If an SVD file is attached and the read is exactly one register wide, "
+            "the response includes decoded SVD field names and values."
         ),
         inputSchema={
             "type": "object",
@@ -484,13 +498,7 @@ async def handle_connect(state: ProbeState, args: dict[str, Any]) -> dict[str, A
     except ValueError as exc:
         return _err("invalid_backend", str(exc))
 
-    config = ConnectConfig(
-        backend=backend_name,
-        device=args.get("device") or DBGPROBE_JLINK_DEVICE,
-        interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
-        speed_khz=int(args.get("speed_khz") or DBGPROBE_SPEED_KHZ),
-        probe_serial=args.get("probe_id"),
-    )
+    config = _build_config(args, backend_name)
 
     try:
         connect_info = await backend.connect(config)
@@ -550,13 +558,7 @@ async def handle_erase(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
     except ValueError as exc:
         return _err("invalid_backend", str(exc))
 
-    config = ConnectConfig(
-        backend=backend_name,
-        device=args.get("device") or DBGPROBE_JLINK_DEVICE,
-        interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
-        speed_khz=int(args.get("speed_khz") or DBGPROBE_SPEED_KHZ),
-        probe_serial=args.get("probe_id"),
-    )
+    config = _build_config(args, backend_name)
 
     try:
         erase_info = await backend.erase(config, start_addr=start_addr, end_addr=end_addr)
@@ -711,13 +713,7 @@ async def handle_flash(state: ProbeState, args: dict[str, Any]) -> dict[str, Any
     except ValueError as exc:
         return _err("invalid_backend", str(exc))
 
-    config = ConnectConfig(
-        backend=backend_name,
-        device=args.get("device") or DBGPROBE_JLINK_DEVICE,
-        interface=(args.get("interface") or DBGPROBE_INTERFACE).upper(),
-        speed_khz=int(args.get("speed_khz") or DBGPROBE_SPEED_KHZ),
-        probe_serial=args.get("probe_id"),
-    )
+    config = _build_config(args, backend_name)
     try:
         result = await backend.flash(path, addr=addr, verify=verify, reset_after=reset_after, config=config)
     except FileNotFoundError as exc:
@@ -744,6 +740,8 @@ async def handle_mem_read(state: ProbeState, args: dict[str, Any]) -> dict[str, 
     session = state.get_session(args["session_id"])
     address = _parse_addr(args["address"])
     length = int(args["length"])
+    if length < 1 or length > 1_048_576:
+        return _err("invalid_params", "length must be between 1 and 1048576 (1 MB).")
     fmt = args.get("format", "hex")
 
     data = await session.backend.mem_read(address, length)
@@ -802,6 +800,9 @@ async def handle_mem_write(state: ProbeState, args: dict[str, Any]) -> dict[str,
             data = bytes.fromhex(raw)
         except ValueError:
             return _err("invalid_params", "Invalid hex data.")
+
+    if len(data) > 1_048_576:
+        return _err("invalid_params", "Write data exceeds maximum size (1 MB).")
 
     result = await session.backend.mem_write(address, data)
     return _ok(session_id=args["session_id"], **result)

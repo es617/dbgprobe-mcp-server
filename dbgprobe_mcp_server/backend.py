@@ -190,6 +190,10 @@ class Backend(ABC):
         """Whether RTT is currently running."""
         return False
 
+    def rtt_status(self) -> dict[str, Any]:
+        """Return RTT status with backend-specific counters."""
+        return {"active": self.rtt_active}
+
 
 class BackendRegistry:
     """Factory that maps backend names to classes."""

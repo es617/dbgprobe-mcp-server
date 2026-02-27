@@ -29,7 +29,12 @@ DBGPROBE_SPEED_KHZ = int(os.environ.get("DBGPROBE_SPEED_KHZ", "4000"))
 def _coerce_bool(value: Any) -> bool:
     """Coerce a value to bool, handling string representations."""
     if isinstance(value, str):
-        return value.lower() not in ("false", "0", "")
+        low = value.lower()
+        if low in ("true", "1", "yes", "on"):
+            return True
+        if low in ("false", "0", "no", "off", ""):
+            return False
+        raise ValueError(f"Cannot coerce {value!r} to bool")
     return bool(value)
 
 

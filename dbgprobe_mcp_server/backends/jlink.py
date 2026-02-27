@@ -628,7 +628,12 @@ class JLinkBackend(Backend):
         client = self._require_gdb()
         try:
             if self._target_running:
-                sr = await client.halt()
+                # Try interrupt first; if target already stopped (e.g. hit a
+                # breakpoint) before we got here, fall back to query_status.
+                try:
+                    sr = await client.halt()
+                except GdbTimeoutError:
+                    sr = await client.query_status()
             else:
                 sr = await client.query_status()
             self._target_running = False
@@ -649,7 +654,13 @@ class JLinkBackend(Backend):
     async def step(self) -> dict[str, Any]:
         client = self._require_gdb()
         if self._target_running:
-            raise ConnectionError("Target is running. Call dbgprobe.halt first.")
+            # Target may have stopped asynchronously (e.g. breakpoint hit) —
+            # check before refusing.
+            try:
+                sr = await asyncio.wait_for(client.wait_stop(timeout=0.1), timeout=0.2)
+                self._target_running = False
+            except (TimeoutError, GdbTimeoutError):
+                raise ConnectionError("Target is running. Call dbgprobe.halt first.") from None
         try:
             sr = await client.step()
             self._target_running = False
@@ -790,6 +801,14 @@ class JLinkBackend(Backend):
     @property
     def rtt_active(self) -> bool:
         return self._rtt_task is not None and not self._rtt_task.done()
+
+    def rtt_status(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"active": self.rtt_active}
+        if self.rtt_active:
+            result["bytes_buffered"] = len(self._rtt_buf)
+            result["total_read"] = self._rtt_total_read
+            result["total_written"] = self._rtt_total_written
+        return result
 
     async def rtt_start(self, address: int | None = None) -> dict[str, Any]:
         if self.rtt_active:

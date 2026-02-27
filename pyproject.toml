@@ -63,7 +63,7 @@ ignore = [
     "RUF001",  # en-dash in strings is intentional
     "RUF002",  # en-dash in docstrings is intentional
     "RUF003",  # en-dash in comments is intentional
-    "RUF006",  # fire-and-forget create_task is intentional in signal handlers
+    "RUF006",  # fire-and-forget create_task: RTT reader loop, signal handlers
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -6,9 +6,13 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dbgprobe_mcp_server.backend import Backend, ConnectConfig
+
+if TYPE_CHECKING:
+    from dbgprobe_mcp_server.elf import ElfData
+    from dbgprobe_mcp_server.svd import SvdData
 
 logger = logging.getLogger("dbgprobe_mcp_server")
 
@@ -29,8 +33,8 @@ class DbgProbeSession:
     backend: Backend | None = None
     config: ConnectConfig | None = None
     spec: dict[str, Any] | None = None
-    elf: Any | None = None  # ElfData when attached, avoids import dependency
-    svd: Any | None = None  # SvdData when attached, avoids import dependency
+    elf: ElfData | None = None
+    svd: SvdData | None = None
     created_at: float = field(default_factory=time.time)
     extra: dict[str, Any] = field(default_factory=dict)
     breakpoints: dict[int, Breakpoint] = field(default_factory=dict)  # addr -> Breakpoint

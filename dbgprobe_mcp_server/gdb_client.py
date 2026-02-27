@@ -290,6 +290,10 @@ class GdbClient:
         Uses readuntil(b'#') to grab everything up to the hash in one
         call, then readexactly(2) for the checksum — two event-loop
         iterations per packet regardless of payload size.
+
+        NOTE: This assumes ASCII-only packets (m/M/g/G/p/P/q/s/c/Z/z).
+        Binary X packets can contain literal '#' and would need a
+        length-aware parser instead.
         """
         if self._reader is None:
             raise GdbConnectionError("Not connected")
@@ -330,6 +334,9 @@ class GdbClient:
             return
 
         # Normal command response.
+        # Safe to set unconditionally: GDB RSP is request-response and
+        # send_packet() serializes access, so at most one response is
+        # in flight at a time.
         self._response_data = body
         self._response_event.set()
 

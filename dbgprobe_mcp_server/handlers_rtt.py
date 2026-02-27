@@ -194,14 +194,8 @@ async def handle_rtt_status(state: ProbeState, args: dict[str, Any]) -> dict[str
     session = state.get_session(session_id)
     if session.backend is None:
         raise ConnectionError("No backend attached to this session.")
-    backend = session.backend
-    active = backend.rtt_active
-    result: dict[str, Any] = {"session_id": session_id, "active": active}
-    # Expose counters from JLink backend if available
-    if hasattr(backend, "_rtt_buf"):
-        result["bytes_buffered"] = len(backend._rtt_buf)
-        result["total_read"] = backend._rtt_total_read
-        result["total_written"] = backend._rtt_total_written
+    result = session.backend.rtt_status()
+    result["session_id"] = session_id
     return _ok(**result)
 
 
