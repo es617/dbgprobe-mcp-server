@@ -140,328 +140,375 @@ def pp(data):
     print(json.dumps(data, indent=2, default=str))
 
 
-def print_ports(ports):
-    if not ports:
-        print("  No ports found.")
-        return
-    for i, p in enumerate(ports):
-        device = p.get("device", "?")
-        desc = p.get("description", "")
-        mfr = p.get("manufacturer", "")
-        extra = f"  ({mfr})" if mfr else ""
-        print(f"  [{i}] {device:30s}  {desc}{extra}")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# State to remember session ID between commands
+last_session_id = None
+
+
+def parse_addr(s):
+    """Parse an address string: accept 0x prefix (hex) or plain decimal."""
+    s = s.strip()
+    if s.startswith("0x") or s.startswith("0X"):
+        return int(s, 16)
+    return int(s)
+
+
+def require_session(args_session=None):
+    """Return session_id from args or last_session_id, or print error."""
+    sid = args_session or last_session_id
+    if not sid:
+        print("  No session ID. Run 'connect' first.")
+        return None
+    return sid
 
 
 # ---------------------------------------------------------------------------
-# Commands
+# Commands — Session lifecycle
 # ---------------------------------------------------------------------------
 
-# State to remember IDs between commands
-last_connection_id = None
-last_ports = []
+
+def cmd_probes(client, args):
+    result = client.call_tool("dbgprobe.probes.list", {})
+    pp(result)
 
 
-def cmd_ports(client, args):
-    global last_ports
-    result = client.call_tool("dbgprobe.list_ports", {})
-    if result and result.get("ok"):
-        last_ports = result.get("ports", [])
-        print_ports(last_ports)
-    else:
-        pp(result)
-
-
-def cmd_open(client, args):
-    global last_connection_id
+def cmd_connect(client, args):
+    global last_session_id
     if not args:
-        print("  Usage: open <port or index> [baudrate]")
+        print("  Usage: connect <device> [probe_id]")
         return
-
-    port = args[0]
-    # Allow opening by index from last ports listing
-    if port.isdigit() and last_ports:
-        idx = int(port)
-        if 0 <= idx < len(last_ports):
-            port = last_ports[idx]["device"]
-        else:
-            print(f"  Index {idx} out of range (0-{len(last_ports) - 1})")
-            return
-
-    params = {"port": port}
+    params = {"device": args[0]}
     if len(args) > 1:
-        try:
-            params["baudrate"] = int(args[1])
-        except ValueError:
-            print(f"  Invalid baudrate: {args[1]}")
-            return
-
-    print(f"  Opening {port}...")
-    result = client.call_tool("dbgprobe.open", params)
+        params["probe_id"] = args[1]
+    result = client.call_tool("dbgprobe.connect", params)
     if result and result.get("ok"):
-        last_connection_id = result["connection_id"]
-        config = result.get("config", {})
-        baud = config.get("baudrate", "?")
-        print(f"  Opened: {last_connection_id}  ({port} at {baud} baud)")
+        last_session_id = result.get("session_id")
+        print(f"  Connected: session_id={last_session_id}")
     else:
         pp(result)
 
 
-def cmd_close(client, args):
-    global last_connection_id
-    cid = args[0] if args else last_connection_id
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
+def cmd_disconnect(client, args):
+    global last_session_id
+    sid = require_session(args[0] if args else None)
+    if not sid:
         return
-    result = client.call_tool("dbgprobe.close", {"connection_id": cid})
+    result = client.call_tool("dbgprobe.disconnect", {"session_id": sid})
     if result and result.get("ok"):
-        print(f"  Closed: {cid}")
-        if cid == last_connection_id:
-            last_connection_id = None
+        print(f"  Disconnected: {sid}")
+        if sid == last_session_id:
+            last_session_id = None
     else:
         pp(result)
 
 
-def cmd_read(client, args):
-    cid = last_connection_id
-    nbytes = 256
-    timeout_ms = None
-
-    for a in args:
-        if a.startswith("t="):
-            timeout_ms = int(a[2:])
-        elif a.isdigit():
-            nbytes = int(a)
-        else:
-            cid = a
-
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-
-    params = {"connection_id": cid, "nbytes": nbytes}
-    if timeout_ms is not None:
-        params["timeout_ms"] = timeout_ms
-
-    result = client.call_tool("dbgprobe.read", params)
-    if result and result.get("ok"):
-        data = result.get("data", "")
-        n = result.get("n_read", 0)
-        if n == 0:
-            print("  (no data)")
-        else:
-            print(f"  [{n} bytes] {data}")
-    else:
-        pp(result)
-
-
-def cmd_write(client, args):
-    cid = last_connection_id
-    if not args:
-        print("  Usage: write <text> [connection_id]")
-        return
-
-    # Join all args as the text to send
-    text = " ".join(args)
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-
-    result = client.call_tool(
-        "dbgprobe.write",
-        {"connection_id": cid, "data": text, "append_newline": True},
-    )
-    if result and result.get("ok"):
-        n = result.get("bytes_written", 0)
-        print(f"  Wrote {n} bytes")
-    else:
-        pp(result)
-
-
-def cmd_writehex(client, args):
-    cid = last_connection_id
-    if not args:
-        print("  Usage: writehex <hex_data> [connection_id]")
-        print("  Example: writehex 48656c6c6f")
-        return
-
-    hex_data = args[0]
-    if len(args) > 1:
-        cid = args[1]
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-
-    result = client.call_tool(
-        "dbgprobe.write",
-        {"connection_id": cid, "data": hex_data, "as": "hex"},
-    )
-    if result and result.get("ok"):
-        n = result.get("bytes_written", 0)
-        print(f"  Wrote {n} bytes")
-    else:
-        pp(result)
-
-
-def cmd_readline(client, args):
-    cid = last_connection_id
-    timeout_ms = None
-
-    for a in args:
-        if a.startswith("t="):
-            timeout_ms = int(a[2:])
-        else:
-            cid = a
-
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-
-    params = {"connection_id": cid}
-    if timeout_ms is not None:
-        params["timeout_ms"] = timeout_ms
-
-    result = client.call_tool("dbgprobe.readline", params)
-    if result and result.get("ok"):
-        data = result.get("data", "")
-        n = result.get("n_read", 0)
-        if n == 0:
-            print("  (no data)")
-        else:
-            print(f"  {data.rstrip()}")
-    else:
-        pp(result)
-
-
-def cmd_readuntil(client, args):
-    cid = last_connection_id
-    if not args:
-        print("  Usage: readuntil <delimiter> [connection_id]")
-        return
-
-    delimiter = args[0]
-    if len(args) > 1:
-        cid = args[1]
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-
-    result = client.call_tool(
-        "dbgprobe.read_until",
-        {"connection_id": cid, "delimiter": delimiter},
-    )
-    if result and result.get("ok"):
-        data = result.get("data", "")
-        n = result.get("n_read", 0)
-        if n == 0:
-            print("  (no data)")
-        else:
-            print(f"  [{n} bytes] {data}")
-    else:
-        pp(result)
-
-
-def cmd_flush(client, args):
-    cid = last_connection_id
-    what = "both"
-    for a in args:
-        if a in ("input", "output", "both"):
-            what = a
-        else:
-            cid = a
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-    result = client.call_tool("dbgprobe.flush", {"connection_id": cid, "what": what})
-    if result and result.get("ok"):
-        print(f"  Flushed ({what})")
-    else:
-        pp(result)
-
-
-def cmd_dtr(client, args):
-    cid = last_connection_id
-    if not args:
-        print("  Usage: dtr <true|false> [connection_id]")
-        return
-    value = args[0].lower() in ("true", "1", "on", "high")
-    if len(args) > 1:
-        cid = args[1]
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-    result = client.call_tool("dbgprobe.set_dtr", {"connection_id": cid, "value": value})
-    if result and result.get("ok"):
-        print(f"  DTR = {value}")
-    else:
-        pp(result)
-
-
-def cmd_rts(client, args):
-    cid = last_connection_id
-    if not args:
-        print("  Usage: rts <true|false> [connection_id]")
-        return
-    value = args[0].lower() in ("true", "1", "on", "high")
-    if len(args) > 1:
-        cid = args[1]
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-    result = client.call_tool("dbgprobe.set_rts", {"connection_id": cid, "value": value})
-    if result and result.get("ok"):
-        print(f"  RTS = {value}")
-    else:
-        pp(result)
-
-
-def cmd_pulse_dtr(client, args):
-    cid = last_connection_id
-    duration = 100
-    for a in args:
-        if a.isdigit():
-            duration = int(a)
-        else:
-            cid = a
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-    result = client.call_tool("dbgprobe.pulse_dtr", {"connection_id": cid, "duration_ms": duration})
-    if result and result.get("ok"):
-        print(f"  DTR pulsed ({duration}ms)")
-    else:
-        pp(result)
-
-
-def cmd_pulse_rts(client, args):
-    cid = last_connection_id
-    duration = 100
-    for a in args:
-        if a.isdigit():
-            duration = int(a)
-        else:
-            cid = a
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-    result = client.call_tool("dbgprobe.pulse_rts", {"connection_id": cid, "duration_ms": duration})
-    if result and result.get("ok"):
-        print(f"  RTS pulsed ({duration}ms)")
-    else:
-        pp(result)
+def cmd_sessions(client, args):
+    result = client.call_tool("dbgprobe.connections.list", {})
+    pp(result)
 
 
 def cmd_status(client, args):
-    cid = args[0] if args else last_connection_id
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
+    sid = require_session(args[0] if args else None)
+    if not sid:
         return
-    result = client.call_tool("dbgprobe.connection_status", {"connection_id": cid})
+    result = client.call_tool("dbgprobe.status", {"session_id": sid})
     pp(result)
 
 
-def cmd_list(client, args):
-    result = client.call_tool("dbgprobe.connections.list", {})
+# ---------------------------------------------------------------------------
+# Commands — Execution
+# ---------------------------------------------------------------------------
+
+
+def cmd_halt(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    result = client.call_tool("dbgprobe.halt", {"session_id": sid})
     pp(result)
+
+
+def cmd_go(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    result = client.call_tool("dbgprobe.go", {"session_id": sid})
+    pp(result)
+
+
+def cmd_step(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    params = {"session_id": sid}
+    if args:
+        try:
+            params["count"] = int(args[0])
+        except ValueError:
+            print(f"  Invalid count: {args[0]}")
+            return
+    result = client.call_tool("dbgprobe.step", params)
+    pp(result)
+
+
+def cmd_reset(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    params = {"session_id": sid}
+    if args:
+        mode = args[0].lower()
+        if mode not in ("soft", "hard", "halt"):
+            print(f"  Invalid reset mode: {mode} (use soft, hard, or halt)")
+            return
+        params["mode"] = mode
+    result = client.call_tool("dbgprobe.reset", params)
+    pp(result)
+
+
+# ---------------------------------------------------------------------------
+# Commands — Memory
+# ---------------------------------------------------------------------------
+
+
+def cmd_read(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    if not args:
+        print("  Usage: read <addr> [len]")
+        return
+    try:
+        addr = parse_addr(args[0])
+    except ValueError:
+        print(f"  Invalid address: {args[0]}")
+        return
+    length = 4
+    if len(args) > 1:
+        try:
+            length = int(args[1])
+        except ValueError:
+            print(f"  Invalid length: {args[1]}")
+            return
+    result = client.call_tool("dbgprobe.mem.read", {"session_id": sid, "address": addr, "length": length})
+    pp(result)
+
+
+def cmd_write(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    if len(args) < 2:
+        print("  Usage: write <addr> <hex_data>")
+        return
+    try:
+        addr = parse_addr(args[0])
+    except ValueError:
+        print(f"  Invalid address: {args[0]}")
+        return
+    result = client.call_tool(
+        "dbgprobe.mem.write",
+        {"session_id": sid, "address": addr, "data": args[1]},
+    )
+    pp(result)
+
+
+# ---------------------------------------------------------------------------
+# Commands — Flash
+# ---------------------------------------------------------------------------
+
+
+def cmd_flash(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    if not args:
+        print("  Usage: flash <path> [addr]")
+        return
+    params = {"session_id": sid, "path": args[0]}
+    if len(args) > 1:
+        try:
+            params["address"] = parse_addr(args[1])
+        except ValueError:
+            print(f"  Invalid address: {args[1]}")
+            return
+    result = client.call_tool("dbgprobe.flash", params)
+    pp(result)
+
+
+def cmd_erase(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    params = {"session_id": sid}
+    if len(args) >= 2:
+        try:
+            params["start"] = parse_addr(args[0])
+            params["end"] = parse_addr(args[1])
+        except ValueError:
+            print("  Invalid address. Usage: erase [start end]")
+            return
+    result = client.call_tool("dbgprobe.erase", params)
+    pp(result)
+
+
+# ---------------------------------------------------------------------------
+# Commands — Breakpoints
+# ---------------------------------------------------------------------------
+
+
+def cmd_bp(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    if not args:
+        print("  Usage: bp <addr|symbol> [hw]")
+        return
+    params = {"session_id": sid, "address": args[0]}
+    if len(args) > 1 and args[1].lower() == "hw":
+        params["type"] = "hw"
+    result = client.call_tool("dbgprobe.breakpoint.set", params)
+    pp(result)
+
+
+def cmd_bpc(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    if not args:
+        print("  Usage: bpc <addr>")
+        return
+    result = client.call_tool("dbgprobe.breakpoint.clear", {"session_id": sid, "address": args[0]})
+    pp(result)
+
+
+def cmd_bpl(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    result = client.call_tool("dbgprobe.breakpoint.list", {"session_id": sid})
+    pp(result)
+
+
+# ---------------------------------------------------------------------------
+# Commands — RTT (subcommands)
+# ---------------------------------------------------------------------------
+
+
+def cmd_rtt(client, args):
+    if not args:
+        print("  Usage: rtt <start|stop|read|write|status> [args...]")
+        return
+    sub = args[0].lower()
+    sid = require_session()
+    if not sid:
+        return
+
+    if sub == "start":
+        params = {"session_id": sid}
+        if len(args) > 1:
+            try:
+                params["address"] = parse_addr(args[1])
+            except ValueError:
+                print(f"  Invalid address: {args[1]}")
+                return
+        result = client.call_tool("dbgprobe.rtt.start", params)
+        pp(result)
+
+    elif sub == "stop":
+        result = client.call_tool("dbgprobe.rtt.stop", {"session_id": sid})
+        pp(result)
+
+    elif sub == "read":
+        result = client.call_tool("dbgprobe.rtt.read", {"session_id": sid})
+        pp(result)
+
+    elif sub == "write":
+        if len(args) < 2:
+            print("  Usage: rtt write <text>")
+            return
+        text = " ".join(args[1:])
+        result = client.call_tool("dbgprobe.rtt.write", {"session_id": sid, "data": text})
+        pp(result)
+
+    elif sub == "status":
+        result = client.call_tool("dbgprobe.rtt.status", {"session_id": sid})
+        pp(result)
+
+    else:
+        print(f"  Unknown rtt subcommand: {sub}")
+        print("  Subcommands: start, stop, read, write, status")
+
+
+# ---------------------------------------------------------------------------
+# Commands — SVD (subcommands)
+# ---------------------------------------------------------------------------
+
+
+def cmd_svd(client, args):
+    if not args:
+        print("  Usage: svd <load|read|write|list> [args...]")
+        return
+    sub = args[0].lower()
+    sid = require_session()
+    if not sid:
+        return
+
+    if sub == "load":
+        if len(args) < 2:
+            print("  Usage: svd load <path>")
+            return
+        result = client.call_tool("dbgprobe.svd.attach", {"session_id": sid, "path": args[1]})
+        pp(result)
+
+    elif sub == "read":
+        if len(args) < 2:
+            print("  Usage: svd read <periph.reg>")
+            return
+        result = client.call_tool("dbgprobe.svd.read", {"session_id": sid, "register": args[1]})
+        pp(result)
+
+    elif sub == "write":
+        if len(args) < 3:
+            print("  Usage: svd write <periph.reg> <value>")
+            return
+        result = client.call_tool(
+            "dbgprobe.svd.write",
+            {"session_id": sid, "register": args[1], "value": args[2]},
+        )
+        pp(result)
+
+    elif sub == "list":
+        result = client.call_tool("dbgprobe.svd.list_peripherals", {"session_id": sid})
+        pp(result)
+
+    else:
+        print(f"  Unknown svd subcommand: {sub}")
+        print("  Subcommands: load, read, write, list")
+
+
+# ---------------------------------------------------------------------------
+# Commands — ELF
+# ---------------------------------------------------------------------------
+
+
+def cmd_elf(client, args):
+    sid = require_session()
+    if not sid:
+        return
+    if not args:
+        print("  Usage: elf <path>")
+        return
+    result = client.call_tool("dbgprobe.elf.attach", {"session_id": sid, "path": args[0]})
+    pp(result)
+
+
+# ---------------------------------------------------------------------------
+# Commands — Utility
+# ---------------------------------------------------------------------------
 
 
 def cmd_raw(client, args):
@@ -481,56 +528,39 @@ def cmd_raw(client, args):
     pp(result)
 
 
-def cmd_send(client, args):
-    """Write text + newline, then readline the response."""
-    cid = last_connection_id
-    if not args:
-        print("  Usage: send <text>")
-        return
-    text = " ".join(args)
-    if not cid:
-        print("  No connection ID. Run 'open' first.")
-        return
-
-    # Write
-    result = client.call_tool(
-        "dbgprobe.write",
-        {"connection_id": cid, "data": text, "append_newline": True},
-    )
-    if not result or not result.get("ok"):
-        pp(result)
-        return
-
-    # Read response
-    time.sleep(0.1)
-    result = client.call_tool("dbgprobe.readline", {"connection_id": cid, "timeout_ms": 2000})
-    if result and result.get("ok"):
-        data = result.get("data", "")
-        if data:
-            print(f"  {data.rstrip()}")
-        else:
-            print("  (no response)")
-    else:
-        pp(result)
-
+# ---------------------------------------------------------------------------
+# Command table
+# ---------------------------------------------------------------------------
 
 COMMANDS = {
-    "ports": (cmd_ports, "ports — List available debug probes"),
-    "open": (cmd_open, "open <port|index> [baud] — Open a debug probe"),
-    "close": (cmd_close, "close [connection_id] — Close connection"),
-    "read": (cmd_read, "read [nbytes] [t=timeout_ms] — Read raw bytes"),
-    "write": (cmd_write, "write <text> — Write text + newline"),
-    "writehex": (cmd_writehex, "writehex <hex> — Write raw hex bytes"),
-    "readline": (cmd_readline, "readline [t=timeout_ms] — Read one line"),
-    "readuntil": (cmd_readuntil, "readuntil <delimiter> — Read until delimiter"),
-    "send": (cmd_send, "send <text> — Write + readline (request/response)"),
-    "flush": (cmd_flush, "flush [input|output|both] — Flush buffers"),
-    "dtr": (cmd_dtr, "dtr <true|false> — Set DTR line"),
-    "rts": (cmd_rts, "rts <true|false> — Set RTS line"),
-    "pulse_dtr": (cmd_pulse_dtr, "pulse_dtr [duration_ms] — Pulse DTR low"),
-    "pulse_rts": (cmd_pulse_rts, "pulse_rts [duration_ms] — Pulse RTS low"),
-    "status": (cmd_status, "status [connection_id] — Connection status"),
-    "list": (cmd_list, "list — List open connections"),
+    # Session lifecycle
+    "probes": (cmd_probes, "probes — List attached probes"),
+    "connect": (cmd_connect, "connect <device> [probe_id] — Connect to target"),
+    "disconnect": (cmd_disconnect, "disconnect — Disconnect session"),
+    "sessions": (cmd_sessions, "sessions — List open sessions"),
+    "status": (cmd_status, "status — Show target status (halted/running, PC)"),
+    # Execution
+    "halt": (cmd_halt, "halt — Halt the target"),
+    "go": (cmd_go, "go — Resume execution"),
+    "step": (cmd_step, "step [count] — Single-step (default 1)"),
+    "reset": (cmd_reset, "reset [soft|hard|halt] — Reset target (default soft)"),
+    # Memory
+    "read": (cmd_read, "read <addr> [len] — Read memory (default 4 bytes)"),
+    "write": (cmd_write, "write <addr> <hex> — Write memory"),
+    # Flash
+    "flash": (cmd_flash, "flash <path> [addr] — Flash binary to target"),
+    "erase": (cmd_erase, "erase [start end] — Erase flash (full chip if no args)"),
+    # Breakpoints
+    "bp": (cmd_bp, "bp <addr|symbol> [hw] — Set breakpoint"),
+    "bpc": (cmd_bpc, "bpc <addr> — Clear breakpoint"),
+    "bpl": (cmd_bpl, "bpl — List breakpoints"),
+    # RTT
+    "rtt": (cmd_rtt, "rtt <start|stop|read|write|status> — RTT commands"),
+    # SVD
+    "svd": (cmd_svd, "svd <load|read|write|list> — SVD register commands"),
+    # ELF
+    "elf": (cmd_elf, "elf <path> — Load ELF symbol file"),
+    # Utility
     "raw": (cmd_raw, "raw <tool_name> [json_args] — Call any tool directly"),
 }
 
@@ -560,7 +590,7 @@ def main():
         print("  [error] Failed to initialize server.")
         return
 
-    print("  Connection ID memory: auto-tracked from last open\n")
+    print("  Session ID memory: auto-tracked from last connect\n")
 
     try:
         while True:
