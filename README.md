@@ -15,6 +15,10 @@ Works out of the box with Claude Code and any MCP-compatible runtime. Communicat
 
 > **Example:** Let Claude Code list attached J-Link probes, connect to your nRF52840, flash a new firmware, read memory, and reset the target — all conversationally.
 
+### Demo
+
+[Video walkthrough](https://youtu.be/nLt0Vj8TAHs) — connecting to a J-Link probe, flashing firmware, loading ELF and SVD for symbol-aware debugging, RTT logging, and breakpoints.
+
 ---
 
 ## Why this exists
@@ -62,6 +66,8 @@ Then in Claude Code, try:
 
 > "List attached debug probes, connect to the J-Link, and read 16 bytes from address 0x20000000."
 
+<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_list_connect.png" alt="Listing probes and connecting" width="600"></p>
+
 ---
 
 ## Supported backends
@@ -98,7 +104,9 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 | **Plugins** | `dbgprobe.plugin.list`, `dbgprobe.plugin.template`, `dbgprobe.plugin.load`, `dbgprobe.plugin.reload` |
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
 
-See [docs/tools.md](docs/tools.md) for full schemas and examples.
+See [docs/tools.md](https://github.com/es617/dbgprobe-mcp-server/blob/main/docs/tools.md) for full schemas and examples.
+
+<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_erase_flash.png" alt="Erasing and flashing firmware" width="600"></p>
 
 ---
 
@@ -172,6 +180,10 @@ Attach an ELF file to a session to enable symbol-aware debugging:
 
 The agent calls `elf.attach`, `breakpoint.set(symbol="main")`, `go`, then `status` — and gets back `"halted at main+0"` instead of a raw hex address.
 
+<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_status_elf.png" alt="ELF symbol resolution — PC resolved to arch_cpu_idle+18" width="600"></p>
+
+<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_test_breakpoint.png" alt="Breakpoint hit at main — symbol-aware debugging" width="600"></p>
+
 ---
 
 ## SVD Support
@@ -191,6 +203,20 @@ Attach an SVD (System View Description) file to a session to enable register-lev
 ```
 
 The agent calls `svd.attach`, `svd.read("GPIO.PIN_CNF[3]")`, then `svd.set_field("GPIO.PIN_CNF[3].PULL", "PullUp")` — and gets back decoded field values instead of raw hex.
+
+<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_svd.png" alt="SVD attached — 84 peripherals, 2332 registers" width="600"></p>
+
+---
+
+## RTT (Real-Time Transfer)
+
+Start, stop, read, and write to SEGGER RTT channels. The agent can stream target log output and send data to the device — useful for debugging firmware that prints over RTT instead of UART.
+
+```
+> "Start RTT and show me the output."
+```
+
+<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_rtt.png" alt="RTT streaming Zephyr boot log from target" width="600"></p>
 
 ---
 
@@ -216,7 +242,6 @@ npx @modelcontextprotocol/inspector python -m dbgprobe_mcp_server
 
 - [ ] **OpenOCD backend** — support ST-Link, CMSIS-DAP, and other probes via OpenOCD subprocess
 - [ ] **pyOCD backend** — native Python probe access via pyOCD library
-- [x] **RTT support** — Real-Time Transfer (read target output via persistent debug connection)
 - [ ] **Multi-core support** — target specific cores on multi-core SoCs
 - [ ] **Cortex-A/R support** — ARM-mode breakpoints (`kind=4`); currently Thumb-only (Cortex-M)
 ---
