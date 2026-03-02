@@ -34,12 +34,6 @@ _JLINK_GDB_NAMES: dict[str, list[str]] = {
     "win32": ["JLinkGDBServerCL.exe"],
 }
 
-_JLINK_RTT_NAMES: dict[str, list[str]] = {
-    "darwin": ["JLinkRTTClient"],
-    "linux": ["JLinkRTTClient"],
-    "win32": ["JLinkRTTClient.exe"],
-}
-
 _COMMON_DIRS: dict[str, list[str]] = {
     "darwin": [
         "/Applications/SEGGER/JLink",
@@ -113,15 +107,6 @@ def find_jlink_gdbserver() -> str | None:
     return _find_executable(
         "DBGPROBE_JLINK_GDBSERVER_PATH",
         _JLINK_GDB_NAMES.get(pk, []),
-        _COMMON_DIRS.get(pk, []),
-    )
-
-
-def find_jlink_rttclient() -> str | None:
-    pk = _platform_key()
-    return _find_executable(
-        "DBGPROBE_JLINK_RTTCLIENT_PATH",
-        _JLINK_RTT_NAMES.get(pk, []),
         _COMMON_DIRS.get(pk, []),
     )
 
@@ -376,7 +361,6 @@ class JLinkBackend(Backend):
     def __init__(self) -> None:
         self._exe: str | None = None
         self._gdbserver_path: str | None = None
-        self._rttclient: str | None = None
         self._config: ConnectConfig | None = None
 
         # GDBServer persistent connection state
@@ -405,11 +389,9 @@ class JLinkBackend(Backend):
     def _resolve_paths(self) -> dict[str, str | None]:
         self._exe = find_jlink_exe()
         self._gdbserver_path = find_jlink_gdbserver()
-        self._rttclient = find_jlink_rttclient()
         return {
             "jlink_exe": self._exe,
             "jlink_gdbserver": self._gdbserver_path,
-            "jlink_rttclient": self._rttclient,
         }
 
     # ------------------------------------------------------------------

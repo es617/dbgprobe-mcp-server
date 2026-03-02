@@ -68,6 +68,8 @@ Then in Claude Code, try:
 
 <p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_list_connect.png" alt="Listing probes and connecting" width="600"></p>
 
+<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_erase_flash.png" alt="Erasing and flashing firmware" width="600"></p>
+
 ---
 
 ## Supported backends
@@ -90,6 +92,8 @@ Install the [SEGGER J-Link Software Pack](https://www.segger.com/downloads/jlink
 
 Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 
+> *This project is not affiliated with or sponsored by SEGGER. J-Link is used because it's widely available and well-supported.*
+
 ---
 
 ## Tools
@@ -105,8 +109,6 @@ Or set `DBGPROBE_JLINK_PATH` to point to the executable directly.
 | **Tracing** | `dbgprobe.trace.status`, `dbgprobe.trace.tail` |
 
 See [docs/tools.md](https://github.com/es617/dbgprobe-mcp-server/blob/main/docs/tools.md) for full schemas and examples.
-
-<p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_erase_flash.png" alt="Erasing and flashing firmware" width="600"></p>
 
 ---
 
@@ -156,7 +158,6 @@ claude mcp add dbgprobe -e DBGPROBE_MCP_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 |---|---|---|
 | `DBGPROBE_JLINK_PATH` | auto-detect | Explicit path to `JLinkExe` (or `JLink.exe` on Windows). |
 | `DBGPROBE_JLINK_GDBSERVER_PATH` | auto-detect | Explicit path to `JLinkGDBServerCLExe`. |
-| `DBGPROBE_JLINK_RTTCLIENT_PATH` | auto-detect | Explicit path to `JLinkRTTClient`. |
 | `DBGPROBE_JLINK_DEVICE` | *(none)* | Default target device string (e.g. `nRF52840_xxAA`). Can be overridden per-session. |
 | `DBGPROBE_INTERFACE` | `SWD` | Debug interface: `SWD` or `JTAG`. |
 | `DBGPROBE_SPEED_KHZ` | `4000` | Interface clock speed in kHz. |

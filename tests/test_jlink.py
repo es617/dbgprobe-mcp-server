@@ -314,7 +314,6 @@ class TestJLinkBackendConnect:
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value=None),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value="/usr/bin/gdb"),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             pytest.raises(FileNotFoundError, match="JLinkExe not found"),
         ):
             await backend.connect(cfg)
@@ -331,7 +330,6 @@ class TestJLinkBackendConnect:
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             pytest.raises(FileNotFoundError, match="JLinkGDBServerCLExe not found"),
         ):
             await backend.connect(cfg)
@@ -568,7 +566,6 @@ class TestJLinkBackendErase:
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
                 AsyncMock(return_value=("Erasing device...\nErasing done.\n", "", 0)),
@@ -594,7 +591,6 @@ class TestJLinkBackendErase:
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
                 AsyncMock(return_value=("Device is secured. APPROTECT enabled.", "", 0)),
@@ -615,7 +611,6 @@ class TestJLinkBackendErase:
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
                 AsyncMock(return_value=("Some unexpected output with no confirmation.", "", 0)),
@@ -636,7 +631,6 @@ class TestJLinkBackendErase:
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value="/usr/bin/JLinkExe"),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             patch(
                 "dbgprobe_mcp_server.backends.jlink._run_jlink_script",
                 AsyncMock(return_value=("Erasing range...\nErasing done.\n", "", 0)),
@@ -662,7 +656,6 @@ class TestJLinkBackendErase:
         with (
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_exe", return_value=None),
             patch("dbgprobe_mcp_server.backends.jlink.find_jlink_gdbserver", return_value=None),
-            patch("dbgprobe_mcp_server.backends.jlink.find_jlink_rttclient", return_value=None),
             pytest.raises(FileNotFoundError, match="JLinkExe not found"),
         ):
             await backend.erase(cfg)

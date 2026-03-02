@@ -45,13 +45,6 @@
           "name": "DBGPROBE_JLINK_GDBSERVER_PATH"
         },
         {
-          "description": "Explicit path to JLinkRTTClient. Auto-detected if not set.",
-          "isRequired": false,
-          "format": "string",
-          "isSecret": false,
-          "name": "DBGPROBE_JLINK_RTTCLIENT_PATH"
-        },
-        {
           "description": "Default target device string (e.g. nRF52840_xxAA). Can be overridden per-session.",
           "isRequired": false,
           "format": "string",

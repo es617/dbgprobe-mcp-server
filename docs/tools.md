@@ -64,8 +64,7 @@ Returns:
   },
   "resolved_paths": {
     "jlink_exe": "/Applications/SEGGER/JLink/JLinkExe",
-    "jlink_gdbserver": "/Applications/SEGGER/JLink/JLinkGDBServerCLExe",
-    "jlink_rttclient": "/Applications/SEGGER/JLink/JLinkRTTClient"
+    "jlink_gdbserver": "/Applications/SEGGER/JLink/JLinkGDBServerCLExe"
   }
 }
 ```
