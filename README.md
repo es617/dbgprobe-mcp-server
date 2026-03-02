@@ -219,6 +219,8 @@ Start, stop, read, and write to SEGGER RTT channels. The agent can stream target
 
 <p align="center"><img src="https://raw.githubusercontent.com/es617/dbgprobe-mcp-server/main/docs/assets/debug_probe_demo_rtt.png" alt="RTT streaming Zephyr boot log from target" width="600"></p>
 
+For repetitive flows — read device ID, run a self-test sequence, validate calibration — you can package them as **plugins**: Python modules that expose custom tools the agent can call directly. Enable with `DBGPROBE_MCP_PLUGINS=all`. See the [nrf52_info example](https://github.com/es617/dbgprobe-mcp-server/blob/main/examples/nrf52840-dk/nrf52_info_plugin.py).
+
 ---
 
 ## Tracing
