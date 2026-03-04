@@ -11,7 +11,7 @@
 <!-- ![Debug Probe](https://img.shields.io/badge/Debug_Probe-pyOCD-green) -->
 
 A stateful debug probe Model Context Protocol (MCP) server for developer tooling and AI agents.
-Works out of the box with Claude Code and any MCP-compatible runtime. Communicates over **stdio** and drives on-chip debug probes (J-Link first, OpenOCD and pyOCD planned) to flash, debug, and inspect embedded targets.
+Works out of the box with Claude Code, VS Code with Copilot, and any MCP-compatible runtime. Communicates over **stdio** and drives on-chip debug probes (J-Link first, OpenOCD and pyOCD planned) to flash, debug, and inspect embedded targets.
 
 > **Example:** Let Claude Code list attached J-Link probes, connect to your nRF52840, flash a new firmware, read memory, and reset the target — all conversationally.
 
@@ -138,6 +138,27 @@ claude mcp add dbgprobe -e DBGPROBE_MCP_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 ```
 
 > MCP is a protocol. Claude Code is one MCP client; other agent runtimes can also connect to this server.
+
+## Add to VS Code / Copilot
+
+Add to your project's `.vscode/mcp.json` (or create it):
+
+```json
+{
+  "servers": {
+    "dbgprobe": {
+      "type": "stdio",
+      "command": "dbgprobe_mcp",
+      "args": [],
+      "env": {
+        "DBGPROBE_JLINK_DEVICE": "nRF52840_xxAA"
+      }
+    }
+  }
+}
+```
+
+Adjust `env` to match your target — set `DBGPROBE_JLINK_DEVICE` to your chip, or remove it to specify the device at connect time.
 
 ## Environment variables
 
