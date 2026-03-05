@@ -122,6 +122,8 @@ pip install -e ".[test]"
 uv pip install -e ".[test]"
 ```
 
+> MCP is a protocol — this server works with any MCP-compatible client. Below are setup instructions for the most common ones.
+
 ## Add to Claude Code
 
 ```bash
@@ -136,8 +138,6 @@ claude mcp add dbgprobe \
 # Debug logging
 claude mcp add dbgprobe -e DBGPROBE_MCP_LOG_LEVEL=DEBUG -- dbgprobe_mcp
 ```
-
-> MCP is a protocol. Claude Code is one MCP client; other agent runtimes can also connect to this server.
 
 ## Add to VS Code / Copilot
 
@@ -160,6 +160,25 @@ Add to your project's `.vscode/mcp.json` (or create it):
 
 Adjust `env` to match your target — set `DBGPROBE_JLINK_DEVICE` to your chip, or remove it to specify the device at connect time.
 
+## Add to Cursor
+
+Add to your project's `.cursor/mcp.json` (or create it). Cursor does not support dots in tool names, so `DBGPROBE_MCP_TOOL_SEPARATOR` must be set to `_`:
+
+```json
+{
+  "mcpServers": {
+    "dbgprobe": {
+      "command": "dbgprobe_mcp",
+      "args": [],
+      "env": {
+        "DBGPROBE_JLINK_DEVICE": "nRF52840_xxAA",
+        "DBGPROBE_MCP_TOOL_SEPARATOR": "_"
+      }
+    }
+  }
+}
+```
+
 ## Environment variables
 
 ### Server
@@ -171,6 +190,7 @@ Adjust `env` to match your target — set `DBGPROBE_JLINK_DEVICE` to your chip, 
 | `DBGPROBE_MCP_TRACE` | enabled | JSONL tracing of every tool call. Set to `0`, `false`, or `no` to disable. |
 | `DBGPROBE_MCP_TRACE_PAYLOADS` | disabled | Include memory data payloads in traced args (stripped by default). |
 | `DBGPROBE_MCP_TRACE_MAX_BYTES` | `16384` | Max payload chars before truncation (only when `TRACE_PAYLOADS` is on). |
+| `DBGPROBE_MCP_TOOL_SEPARATOR` | `.` | Character used to separate tool name segments. Set to `_` for MCP clients that reject dots in tool names (e.g. Cursor). |
 | `DBGPROBE_MCP_PLUGINS` | disabled | Plugin policy: `all` or comma-separated plugin names (e.g. `nrf52,stm32`). |
 
 ### J-Link backend

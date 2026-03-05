@@ -40,6 +40,10 @@ from dbgprobe_mcp_server.trace import get_trace_buffer, init_trace, sanitize_arg
 # Logging
 # ---------------------------------------------------------------------------
 
+# Tool-name separator (default ".").  Set DBGPROBE_MCP_TOOL_SEPARATOR=_ for
+# MCP clients that reject dots in tool names (e.g. Cursor).
+_TOOL_SEP = os.environ.get("DBGPROBE_MCP_TOOL_SEPARATOR", ".")
+
 _LOG_LEVEL = os.environ.get("DBGPROBE_MCP_LOG_LEVEL", "WARNING").upper()
 logging.basicConfig(
     level=getattr(logging, _LOG_LEVEL, logging.WARNING),
@@ -51,6 +55,18 @@ logger = logging.getLogger("dbgprobe_mcp_server")
 # ---------------------------------------------------------------------------
 # Server construction
 # ---------------------------------------------------------------------------
+
+
+def _apply_tool_separator(tools: list[Tool], handlers: dict[str, Any], sep: str) -> None:
+    """Replace '.' with *sep* in every tool name and handler key."""
+    if sep == ".":
+        return
+    for t in tools:
+        t.name = t.name.replace(".", sep)
+    for old_key in list(handlers):
+        new_key = old_key.replace(".", sep)
+        if new_key != old_key:
+            handlers[new_key] = handlers.pop(old_key)
 
 
 def build_server() -> tuple[Server, ProbeState]:
@@ -84,9 +100,13 @@ def build_server() -> tuple[Server, ProbeState]:
         handlers,
         enabled=plugins_enabled,
         allowlist=plugins_allowlist,
+        tool_separator=_TOOL_SEP,
     )
     manager.load_all()
     handlers.update(handlers_plugin.make_handlers(manager, server))
+
+    # Rename tool names / handler keys for clients that reject dots.
+    _apply_tool_separator(tools, handlers, _TOOL_SEP)
 
     @server.list_tools()
     async def _list_tools() -> list[Tool]:
