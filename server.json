@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.es617/dbgprobe-mcp-server",
-  "description": "Let AI agents interact with on-chip debug probes — connect, flash, read/write memory, reset, halt, and resume targets.",
+  "description": "Let AI agents interact with debug probes — connect, flash, read/write memory, and reset.",
   "repository": {
     "url": "https://github.com/es617/dbgprobe-mcp-server.git",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "dbgprobe-mcp-server",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": {
         "type": "stdio"
       },
