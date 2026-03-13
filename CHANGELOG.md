@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+### Fixed
+- Parse `PacketSize` from the GDB server's `qSupported` response and set memory read/write chunk sizes dynamically. Previously hardcoded at 512 bytes per `M` packet, which caused J-Link GDB server to stop responding after ~4000 rapid-fire writes (e.g. 65× 32KB bulk writes). Chunk sizes now respect the server's advertised limit, accounting for hex encoding overhead. Falls back to conservative defaults (1024/512 bytes) if `PacketSize` is not reported.
+- Serialize `send_packet()` with an `asyncio.Lock` to prevent protocol corruption from concurrent callers. GDB RSP is strictly one-request-one-response; overlapping exchanges would corrupt the `_expecting_stop_response` flag and response routing.
+- Rewrite `halt()` to send `\x03` then query `?` for authoritative stop status, avoiding stale cached stop replies and the 5-second timeout penalty when the target is already halted.
+- Add explicit dispatch routing for `W` (process exit), `X` (process termination), and `F` (File-I/O) RSP packets so they cannot be misrouted as normal command responses.
+
 ## 0.1.3
 
 ### Fixed

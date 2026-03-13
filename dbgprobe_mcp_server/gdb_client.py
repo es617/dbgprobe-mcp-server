@@ -126,8 +126,10 @@ def _make_packet(payload: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 # Chunk limits — keep individual GDB packets reasonably sized.
-_MEM_READ_CHUNK = 1024  # bytes per 'm' request
-_MEM_WRITE_CHUNK = 512  # bytes per 'M' request
+# These are conservative defaults; connect() may raise them based on
+# the PacketSize reported by the server in its qSupported response.
+_DEFAULT_MEM_READ_CHUNK = 1024  # bytes per 'm' request
+_DEFAULT_MEM_WRITE_CHUNK = 512  # bytes per 'M' request
 
 
 class GdbClient:
@@ -157,14 +159,23 @@ class GdbClient:
         self._stop_event = asyncio.Event()
         self._stop_data: str = ""
 
-        # True when send_packet() was called with a command that expects
-        # a T/S stop reply (e.g. '?', 's').  When False, any T/S packet
-        # is always routed to _stop_event, preventing desync when an
-        # unsolicited stop reply arrives during an 'm' or 'M' exchange.
+        # True when send_packet() was called with a command whose primary
+        # response is a T/S stop reply.  When False, any T/S packet is
+        # routed to _stop_event, preventing desync when an unsolicited
+        # stop reply arrives during a non-stop-reply exchange.
         self._expecting_stop_response = False
 
         self._closed = False
         self._ack_mode = True  # start with ack enabled
+
+        # Serialize all request/response exchanges.  GDB RSP is strictly
+        # one-request-one-response, so concurrent send_packet() calls
+        # would corrupt the protocol state.
+        self._send_lock = asyncio.Lock()
+
+        # Memory transfer chunk sizes — updated by _parse_supported().
+        self._mem_read_chunk = _DEFAULT_MEM_READ_CHUNK
+        self._mem_write_chunk = _DEFAULT_MEM_WRITE_CHUNK
 
     # -- properties ----------------------------------------------------------
 
@@ -190,7 +201,8 @@ class GdbClient:
         self._reader_task = asyncio.create_task(self._read_loop())
 
         # Handshake — query supported features.
-        await self.send_packet("qSupported")
+        supported = await self.send_packet("qSupported")
+        self._parse_supported(supported)
         # Query initial status.
         await self.send_packet("?", expect_stop=True)
 
@@ -213,6 +225,40 @@ class GdbClient:
             self._writer = None
             self._reader = None
 
+    def _parse_supported(self, resp: str) -> None:
+        """Parse qSupported response and adjust chunk sizes.
+
+        The response is a semicolon-separated list of features.
+        We look for ``PacketSize=XXXX`` (hex) which tells us the
+        maximum packet length the server can handle.  We derive
+        safe chunk sizes from it, leaving room for the packet header.
+        """
+        for feature in resp.split(";"):
+            if feature.startswith("PacketSize="):
+                try:
+                    max_packet = int(feature.split("=", 1)[1], 16)
+                except (ValueError, IndexError):
+                    continue
+                if max_packet < 128:
+                    # Too small to be useful — keep defaults.
+                    return
+                # Invariant: derived chunks must never produce packets
+                # exceeding the advertised PacketSize.
+                #
+                # 'm' response is chunk*2 hex chars → chunk = max_packet/2 - headroom.
+                # 'M' request is ~20 + chunk*2 hex chars → chunk = (max_packet-headroom)/2.
+                # 32 bytes of headroom for framing ($, #xx, address, length).
+                # Clamp to [1, ..] as a safety net against pathological values.
+                self._mem_read_chunk = max(1, max_packet // 2 - 32)
+                self._mem_write_chunk = max(1, (max_packet - 32) // 2)
+                logger.debug(
+                    "PacketSize=%d → read_chunk=%d, write_chunk=%d",
+                    max_packet,
+                    self._mem_read_chunk,
+                    self._mem_write_chunk,
+                )
+                return
+
     # -- low-level -----------------------------------------------------------
 
     async def send_packet(self, payload: str, timeout: float = 10.0, *, expect_stop: bool = False) -> str:
@@ -220,29 +266,31 @@ class GdbClient:
 
         Returns the response payload (without $ and checksum).
 
-        *expect_stop*: set True for commands whose response is a T/S stop
-        reply (e.g. ``?``, ``s``).  When False (default), any T/S packet
-        that arrives is routed to ``_stop_event`` instead, preventing
-        protocol desync from unsolicited stop replies.
+        *expect_stop*: set True for commands whose primary response is a
+        T/S stop reply (status queries, step, continue, etc.).  When
+        False (default), any T/S packet that arrives is routed to
+        ``_stop_event`` instead, preventing protocol desync from
+        unsolicited stop replies.
         """
         if not self.connected:
             raise GdbConnectionError("Not connected to GDB stub")
 
-        self._expecting_stop_response = expect_stop
-        self._response_event.clear()
-        pkt = _make_packet(payload)
-        logger.debug("GDB TX: %s", pkt)
-        self._writer.write(pkt)  # type: ignore[union-attr]
-        await self._writer.drain()  # type: ignore[union-attr]
+        async with self._send_lock:
+            self._expecting_stop_response = expect_stop
+            self._response_event.clear()
+            pkt = _make_packet(payload)
+            logger.debug("GDB TX: %s", pkt)
+            self._writer.write(pkt)  # type: ignore[union-attr]
+            await self._writer.drain()  # type: ignore[union-attr]
 
-        try:
-            await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
-        except TimeoutError:
-            raise GdbTimeoutError(f"Timeout waiting for response to {payload!r}") from None
-        finally:
-            self._expecting_stop_response = False
+            try:
+                await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
+            except TimeoutError:
+                raise GdbTimeoutError(f"Timeout waiting for response to {payload!r}") from None
+            finally:
+                self._expecting_stop_response = False
 
-        return self._response_data
+            return self._response_data
 
     async def send_interrupt(self) -> None:
         """Send Ctrl-C (\\x03) to halt the target."""
@@ -336,17 +384,40 @@ class GdbClient:
                 return
 
         if body and body[0] in ("T", "S"):
-            # Stop reply — could be from 'c', 's', or interrupt.
+            # Stop reply — could be from any execution command or interrupt.
             # Only deliver to _response_event when the pending command
-            # actually expects a stop reply (e.g. '?', 's').  Otherwise
+            # expects a stop reply as its primary response.  Otherwise
             # route to _stop_event to avoid desynchronizing the protocol
-            # when an unsolicited stop arrives during an 'm'/'M' exchange.
+            # when an unsolicited stop arrives mid-exchange.
             if self._expecting_stop_response and not self._response_event.is_set():
                 self._response_data = body
                 self._response_event.set()
             else:
                 self._stop_data = body
                 self._stop_event.set()
+            return
+
+        if body and body[0] == "W":
+            # Process exit (W<exit-status>) — target terminated normally.
+            logger.warning("GDB target exited: %s", body)
+            self._stop_data = body
+            self._stop_event.set()
+            return
+
+        if body and body[0] == "X":
+            # Process termination (X<signal>) — target killed by signal.
+            logger.warning("GDB target terminated: %s", body)
+            self._stop_data = body
+            self._stop_event.set()
+            return
+
+        if body and body[0] == "F":
+            # File-I/O request (Fcommand,args...) — not supported, reply
+            # with error to decline.  Write is non-blocking; drain happens
+            # on the next send_packet() call.
+            logger.debug("GDB File-I/O request (unsupported): %s", body)
+            if self._writer is not None:
+                self._writer.write(_make_packet("F-1,0"))
             return
 
         # Normal command response.
@@ -364,7 +435,7 @@ class GdbClient:
         remaining = length
         offset = 0
         while remaining > 0:
-            chunk = min(remaining, _MEM_READ_CHUNK)
+            chunk = min(remaining, self._mem_read_chunk)
             pkt = f"m{addr + offset:x},{chunk:x}"
             resp = await self.send_packet(pkt)
             if resp.startswith("E"):
@@ -378,7 +449,7 @@ class GdbClient:
         """Write *data* to target memory."""
         offset = 0
         while offset < len(data):
-            chunk = data[offset : offset + _MEM_WRITE_CHUNK]
+            chunk = data[offset : offset + self._mem_write_chunk]
             hex_data = chunk.hex()
             resp = await self.send_packet(f"M{addr + offset:x},{len(chunk):x}:{hex_data}")
             if resp != "OK":
@@ -406,22 +477,17 @@ class GdbClient:
         return _parse_stop_reply(resp)
 
     async def halt(self, timeout: float = 5.0) -> StopReply:
-        """Send interrupt (\\x03) and wait for the stop reply."""
-        _trace("halt: sending \\x03")
-        # If a stop reply already arrived (target halted on its own),
-        # return it immediately without clearing and re-waiting.
-        if self._stop_event.is_set():
-            _trace("halt: stop_event already set, returning cached stop reply")
-            self._stop_event.clear()
-            return _parse_stop_reply(self._stop_data)
+        """Send interrupt (\\x03) and wait for the target to stop.
 
-        self._stop_event.clear()
+        Sends \\x03, then queries ``?`` to get the authoritative stop
+        reason.  This avoids relying on the async stop-reply channel
+        and works regardless of whether the target was already halted.
+        """
+        _trace("halt: sending \\x03")
         await self.send_interrupt()
-        try:
-            await asyncio.wait_for(self._stop_event.wait(), timeout=timeout)
-            return _parse_stop_reply(self._stop_data)
-        except TimeoutError:
-            raise GdbTimeoutError("Timeout waiting for halt stop reply") from None
+        # Give the target a moment to halt before querying.
+        await asyncio.sleep(0.05)
+        return await self.query_status()
 
     async def query_status(self) -> StopReply:
         """Query current target status via '?'."""

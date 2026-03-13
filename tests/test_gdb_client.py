@@ -216,7 +216,8 @@ class TestGdbClientExecution:
         assert sr.signal == 5
 
     async def test_halt(self, mock_server: MockGdbServer, gdb_client: GdbClient):
-        mock_server.enqueue("T02")
+        # halt() sends \x03 (consumes first T02) then queries ? (consumes second T02)
+        mock_server.enqueue("T02", "T02")
         sr = await gdb_client.halt()
         assert sr.signal == 2
         assert sr.reason == "interrupt"
