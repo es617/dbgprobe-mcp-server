@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+### Fixed
+- Fix GDB protocol desynchronization caused by unsolicited T/S stop replies being routed to the wrong event during memory read/write exchanges. This caused connection drops after ~65 sustained `mem_read`/`mem_write` cycles. Added `expect_stop` flag to `send_packet()` so T/S replies are only treated as command responses when explicitly expected (`?`, `s`, `vCont`), and are otherwise routed to `_stop_event`. Also fixed `halt()` losing already-arrived stop replies.
+
 ## 0.1.2
 
 ### Fixed

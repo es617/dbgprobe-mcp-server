@@ -157,6 +157,12 @@ class GdbClient:
         self._stop_event = asyncio.Event()
         self._stop_data: str = ""
 
+        # True when send_packet() was called with a command that expects
+        # a T/S stop reply (e.g. '?', 's').  When False, any T/S packet
+        # is always routed to _stop_event, preventing desync when an
+        # unsolicited stop reply arrives during an 'm' or 'M' exchange.
+        self._expecting_stop_response = False
+
         self._closed = False
         self._ack_mode = True  # start with ack enabled
 
@@ -186,7 +192,7 @@ class GdbClient:
         # Handshake — query supported features.
         await self.send_packet("qSupported")
         # Query initial status.
-        await self.send_packet("?")
+        await self.send_packet("?", expect_stop=True)
 
     async def close(self) -> None:
         """Close TCP connection and cancel reader task."""
@@ -209,14 +215,20 @@ class GdbClient:
 
     # -- low-level -----------------------------------------------------------
 
-    async def send_packet(self, payload: str, timeout: float = 10.0) -> str:
+    async def send_packet(self, payload: str, timeout: float = 10.0, *, expect_stop: bool = False) -> str:
         """Send a GDB packet and wait for the response.
 
         Returns the response payload (without $ and checksum).
+
+        *expect_stop*: set True for commands whose response is a T/S stop
+        reply (e.g. ``?``, ``s``).  When False (default), any T/S packet
+        that arrives is routed to ``_stop_event`` instead, preventing
+        protocol desync from unsolicited stop replies.
         """
         if not self.connected:
             raise GdbConnectionError("Not connected to GDB stub")
 
+        self._expecting_stop_response = expect_stop
         self._response_event.clear()
         pkt = _make_packet(payload)
         logger.debug("GDB TX: %s", pkt)
@@ -227,6 +239,8 @@ class GdbClient:
             await asyncio.wait_for(self._response_event.wait(), timeout=timeout)
         except TimeoutError:
             raise GdbTimeoutError(f"Timeout waiting for response to {payload!r}") from None
+        finally:
+            self._expecting_stop_response = False
 
         return self._response_data
 
@@ -323,9 +337,11 @@ class GdbClient:
 
         if body and body[0] in ("T", "S"):
             # Stop reply — could be from 'c', 's', or interrupt.
-            # If someone is waiting for a command response, this IS the response
-            # (e.g. for '?' or 's').  Otherwise it's an async stop.
-            if not self._response_event.is_set():
+            # Only deliver to _response_event when the pending command
+            # actually expects a stop reply (e.g. '?', 's').  Otherwise
+            # route to _stop_event to avoid desynchronizing the protocol
+            # when an unsolicited stop arrives during an 'm'/'M' exchange.
+            if self._expecting_stop_response and not self._response_event.is_set():
                 self._response_data = body
                 self._response_event.set()
             else:
@@ -386,29 +402,31 @@ class GdbClient:
 
     async def step(self, timeout: float = 10.0) -> StopReply:
         """Single-step one instruction.  Returns the stop reply."""
-        resp = await self.send_packet("s", timeout=timeout)
+        resp = await self.send_packet("s", timeout=timeout, expect_stop=True)
         return _parse_stop_reply(resp)
 
     async def halt(self, timeout: float = 5.0) -> StopReply:
         """Send interrupt (\\x03) and wait for the stop reply."""
-        _trace("halt: clearing stop_event, sending \\x03")
+        _trace("halt: sending \\x03")
+        # If a stop reply already arrived (target halted on its own),
+        # return it immediately without clearing and re-waiting.
+        if self._stop_event.is_set():
+            _trace("halt: stop_event already set, returning cached stop reply")
+            self._stop_event.clear()
+            return _parse_stop_reply(self._stop_data)
+
         self._stop_event.clear()
         await self.send_interrupt()
-        # The stop reply may come as an async stop or as a direct response.
-        # Try waiting on both channels.
         try:
             await asyncio.wait_for(self._stop_event.wait(), timeout=timeout)
             return _parse_stop_reply(self._stop_data)
         except TimeoutError:
-            # Maybe it arrived on the response channel
-            if self._response_event.is_set() and self._response_data and self._response_data[0] in ("T", "S"):
-                return _parse_stop_reply(self._response_data)
             raise GdbTimeoutError("Timeout waiting for halt stop reply") from None
 
     async def query_status(self) -> StopReply:
         """Query current target status via '?'."""
         _trace("query_status: sending ?")
-        resp = await self.send_packet("?")
+        resp = await self.send_packet("?", expect_stop=True)
         _trace(f"query_status: resp={resp[:40]}")
         return _parse_stop_reply(resp)
 
